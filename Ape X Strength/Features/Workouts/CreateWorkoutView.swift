@@ -96,10 +96,9 @@ struct CreateWorkoutView: View {
     private func exerciseCard(_ exercise: ExerciseListItem) -> some View {
         VStack(spacing: ApeSpacing.md) {
             HStack(spacing: ApeSpacing.md) {
-                RoundedRectangle(cornerRadius: ApeRadius.control)
+                RoundedRectangle(cornerRadius: 6)
                     .fill(ApeColor.primary)
-                    .frame(width: 54, height: 54)
-                    .overlay { Image(systemName: "dumbbell.fill").foregroundStyle(ApeColor.background) }
+                    .frame(width: 38, height: 38)
                 VStack(alignment: .leading, spacing: ApeSpacing.xxs) {
                     Text(exercise.name).font(.apeHeadline).foregroundStyle(ApeColor.textPrimary)
                 }
@@ -113,7 +112,17 @@ struct CreateWorkoutView: View {
                 } label: { Image(systemName: "ellipsis").foregroundStyle(ApeColor.textPrimary).padding() }
             }
 
-            Button("Add Set") { }
+            ForEach(Array((viewModel.plannedSets[exercise.id] ?? []).enumerated()), id: \.element.id) { index, set in
+                setRow(
+                    number: index + 1,
+                    set: viewModel.setBinding(for: exercise.id, setID: set.id),
+                    exercise: exercise
+                ) {
+                    viewModel.removeSet(set.id, from: exercise.id)
+                }
+            }
+
+            Button("Add Set") { viewModel.addSet(to: exercise.id) }
                 .font(.apeBody)
                 .foregroundStyle(ApeColor.textPrimary)
                 .frame(maxWidth: .infinity, minHeight: 30)
@@ -124,6 +133,112 @@ struct CreateWorkoutView: View {
         .padding(ApeSpacing.md)
         .background(ApeColor.surface)
         .clipShape(RoundedRectangle(cornerRadius: ApeRadius.card))
+    }
+
+    private func setRow(
+        number: Int,
+        set: Binding<WorkoutSetDraft>,
+        exercise: ExerciseListItem,
+        onRemove: @escaping () -> Void
+    ) -> some View {
+        SwipeToRemoveSet(action: onRemove) {
+            HStack(spacing: ApeSpacing.xs) {
+                Text("\(number)")
+                    .font(.apeHeadline)
+                    .foregroundStyle(ApeColor.textPrimary)
+                    .frame(width: 38, height: 38)
+                    .background(ApeColor.control)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                TextField(performancePlaceholder(for: exercise.repType), text: set.performanceValue)
+                    .keyboardType(exercise.repType == .reps ? .numberPad : .decimalPad)
+                    .multilineTextAlignment(.center)
+                    .font(.apeBody)
+                    .foregroundStyle(ApeColor.textPrimary)
+                    .frame(maxWidth: .infinity, minHeight: 38)
+                    .background(ApeColor.control)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                if exercise.difficultyType == .bodyweight {
+                    Text("—")
+                        .font(.apeHeadline)
+                        .foregroundStyle(ApeColor.textSecondary)
+                        .frame(maxWidth: .infinity, minHeight: 38)
+                        .background(ApeColor.control)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .accessibilityLabel("Bodyweight")
+                } else {
+                    TextField(weightPlaceholder(for: exercise.difficultyType), text: set.weightValue)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.center)
+                        .font(.apeBody)
+                        .foregroundStyle(ApeColor.textPrimary)
+                        .frame(maxWidth: .infinity, minHeight: 38)
+                        .background(ApeColor.control)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .accessibilityAction(named: "Remove set \(number)", onRemove)
+    }
+
+    private func performancePlaceholder(for repType: ExerciseRepType) -> String {
+        switch repType {
+        case .reps: "Reps"
+        case .time: "Time (s)"
+        case .distance: "Distance"
+        }
+    }
+
+    private func weightPlaceholder(for difficultyType: ExerciseDifficultyType) -> String {
+        difficultyType == .assistedWeight ? "Assisted" : "Weight"
+    }
+}
+
+private struct SwipeToRemoveSet<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: Content
+    @State private var offset: CGFloat = 0
+    @State private var dragStartOffset: CGFloat = 0
+
+    init(action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.action = action
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button(role: .destructive, action: action) {
+                Image(systemName: "trash.fill")
+                    .foregroundStyle(.white)
+                    .frame(width: 62, height: 38)
+            }
+            .background(ApeColor.destructive)
+
+            content
+                .offset(x: offset)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 12)
+                        .onChanged { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            offset = min(0, max(-140, dragStartOffset + value.translation.width))
+                        }
+                        .onEnded { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            if offset < -105 {
+                                withAnimation(.easeOut(duration: 0.18)) { offset = -400 }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: action)
+                            } else {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                    offset = offset < -32 ? -62 : 0
+                                }
+                                dragStartOffset = offset < -32 ? -62 : 0
+                            }
+                        }
+                )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -195,21 +310,41 @@ private struct ExercisePickerView: View {
                 Button {
                     if pending.contains(exercise.id) { pending.remove(exercise.id) } else { pending.insert(exercise.id) }
                 } label: {
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(exercise.name).foregroundStyle(ApeColor.textPrimary)
-                            Text(exercise.repType.title + " • " + exercise.difficultyType.title)
-                                .font(.apeCaption).foregroundStyle(ApeColor.textSecondary)
-                        }
-                        Spacer()
-                        if pending.contains(exercise.id) || selected.contains(exercise.id) {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(ApeColor.primary)
+                    ApeCard {
+                        HStack {
+                            VStack(alignment: .leading, spacing: ApeSpacing.xs) {
+                                HStack(spacing: ApeSpacing.xs) {
+                                    Circle()
+                                        .fill(Color(hex: exercise.primaryMuscleColorHex))
+                                        .frame(width: 14, height: 14)
+                                    Text(exercise.name)
+                                        .font(.apeHeadline)
+                                        .foregroundStyle(ApeColor.textPrimary)
+                                }
+                                HStack {
+                                    ApeTag(title: exercise.repType.title)
+                                    ApeTag(title: exercise.difficultyType.title)
+                                    Text(restLabel(exercise.targetRestSeconds))
+                                        .font(.apeCaption)
+                                        .foregroundStyle(ApeColor.textSecondary)
+                                }
+                            }
+                            Spacer()
+                            if pending.contains(exercise.id) || selected.contains(exercise.id) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(ApeColor.primary)
+                            }
                         }
                     }
                 }
+                .buttonStyle(.plain)
                 .disabled(selected.contains(exercise.id))
-                .listRowBackground(ApeColor.surface)
+                .listRowInsets(EdgeInsets(top: 6, leading: ApeSpacing.md, bottom: 6, trailing: ApeSpacing.md))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
+            .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(ApeColor.background)
             .searchable(text: $searchText, prompt: "Search exercises")

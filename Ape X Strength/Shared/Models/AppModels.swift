@@ -6,6 +6,32 @@ struct WorkoutListItem: Identifiable, Equatable {
     let name: String
     let exerciseCount: Int
     let updatedAt: Date
+    let tags: [WorkoutTagSummary]
+    let statistics: WorkoutStatistics
+}
+
+struct WorkoutTagSummary: Identifiable, Equatable {
+    var id: String { name }
+    let name: String
+    let color: TagColor
+}
+
+struct WorkoutStatistics: Equatable {
+    let lastUsed: Date?
+    let meanDurationMinutes: Double?
+    let meanVolume: Decimal?
+    let meanRestSeconds: Double?
+    let meanIntensity: Double?
+    let meanPercentCompleted: Double?
+
+    static let empty = WorkoutStatistics(
+        lastUsed: nil,
+        meanDurationMinutes: nil,
+        meanVolume: nil,
+        meanRestSeconds: nil,
+        meanIntensity: nil,
+        meanPercentCompleted: nil
+    )
 }
 
 struct TagItem: Identifiable, Hashable {
@@ -41,11 +67,26 @@ struct NewWorkout {
     let name: String
     let exerciseIDs: [NSManagedObjectID]
     let selectedTagIDs: Set<NSManagedObjectID>
+    let plannedSetsByExerciseID: [NSManagedObjectID: [NewPlannedSet]]
+}
+
+struct NewPlannedSet {
+    let reps: Int?
+    let timeSeconds: Double?
+    let distance: Decimal?
+    let weight: Decimal?
+}
+
+struct WorkoutSetDraft: Identifiable, Equatable {
+    let id = UUID()
+    var performanceValue = ""
+    var weightValue = ""
 }
 
 struct ExerciseListItem: Identifiable, Equatable {
     let id: NSManagedObjectID
     let name: String
+    let primaryMuscleColorHex: String
     let repType: ExerciseRepType
     let difficultyType: ExerciseDifficultyType
     let targetRestSeconds: Int

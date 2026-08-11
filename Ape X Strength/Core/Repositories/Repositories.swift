@@ -32,11 +32,20 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         request.predicate = NSPredicate(format: "isArchived == NO")
 
         return try context.fetch(request).map { workout in
-            WorkoutListItem(
+            let sessions = (workout.sessions as? Set<WorkoutSession> ?? [])
+                .filter { $0.endedAt != nil }
+            return WorkoutListItem(
                 id: workout.objectID,
                 name: workout.name ?? "Untitled Workout",
                 exerciseCount: workout.templateExercises?.count ?? 0,
-                updatedAt: workout.updatedAt ?? .distantPast
+                updatedAt: workout.updatedAt ?? .distantPast,
+                tags: (workout.tags as? Set<Tag> ?? [])
+                    .compactMap { tag in
+                        guard let name = tag.name else { return nil }
+                        return WorkoutTagSummary(name: name, color: TagColor(name: name))
+                    }
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
+                statistics: workoutStatistics(from: Array(sessions))
             )
         }
     }
@@ -50,6 +59,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             return ExerciseListItem(
                 id: exercise.objectID,
                 name: exercise.name ?? "Untitled Exercise",
+                primaryMuscleColorHex: exercise.primaryMuscle?.colorHex ?? "8AC5FF",
                 repType: configuration.repType,
                 difficultyType: configuration.difficultyType,
                 targetRestSeconds: Int(exercise.targetRestSeconds)
@@ -100,6 +110,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         workout.updatedAt = Date()
         workout.name = name
         workout.syncState = "pendingCreate"
+        workout.user = try fetchOrCreateLocalUser()
 
         let exercises = try input.exerciseIDs.enumerated().map { position, id in
             guard let exercise = try context.existingObject(with: id) as? Exercise else {
@@ -111,6 +122,20 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             item.syncState = "pendingCreate"
             item.exercise = exercise
             item.workoutTemplate = workout
+
+            let plannedSets = (input.plannedSetsByExerciseID[id] ?? []).enumerated().map { setIndex, input in
+                let set = TemplatePlannedSet(context: context)
+                set.clientUUID = UUID()
+                set.setNumber = Int32(setIndex + 1)
+                set.syncState = "pendingCreate"
+                set.plannedReps = input.reps.map(Int32.init) ?? 0
+                set.plannedTimeSeconds = input.timeSeconds ?? 0
+                set.plannedDistance = input.distance as NSDecimalNumber?
+                set.plannedWeight = input.weight as NSDecimalNumber?
+                set.templateExercise = item
+                return set
+            }
+            item.plannedSets = NSOrderedSet(array: plannedSets)
             return item
         }
         workout.templateExercises = NSOrderedSet(array: exercises)
@@ -124,7 +149,50 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             context.rollback()
             throw error
         }
-        return WorkoutListItem(id: workout.objectID, name: name, exerciseCount: exercises.count, updatedAt: workout.updatedAt ?? Date())
+        return WorkoutListItem(
+            id: workout.objectID,
+            name: name,
+            exerciseCount: exercises.count,
+            updatedAt: workout.updatedAt ?? Date(),
+            tags: tags.compactMap { tag in
+                guard let name = tag.name else { return nil }
+                return WorkoutTagSummary(name: name, color: TagColor(name: name))
+            },
+            statistics: .empty
+        )
+    }
+
+    private func fetchOrCreateLocalUser() throws -> User {
+        let request = User.fetchRequest()
+        request.fetchLimit = 1
+        if let user = try context.fetch(request).first { return user }
+
+        let user = User(context: context)
+        user.serverID = UUID()
+        user.createdAt = Date()
+        user.email = "local@apexstrength.app"
+        user.emailVerified = false
+        user.preferredWeightUnit = "kg"
+        return user
+    }
+
+    private func workoutStatistics(from sessions: [WorkoutSession]) -> WorkoutStatistics {
+        guard !sessions.isEmpty else { return .empty }
+
+        func mean(_ values: [Double]) -> Double? {
+            values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+        }
+
+        let durations = sessions.compactMap { $0.durationSeconds > 0 ? Double($0.durationSeconds) / 60 : nil }
+        let volumes = sessions.compactMap { ($0.volumeWeight as Decimal?).map { NSDecimalNumber(decimal: $0).doubleValue } }
+        return WorkoutStatistics(
+            lastUsed: sessions.compactMap(\.endedAt).max(),
+            meanDurationMinutes: mean(durations),
+            meanVolume: mean(volumes).map { Decimal($0) },
+            meanRestSeconds: mean(sessions.compactMap { $0.averageRestSeconds > 0 ? $0.averageRestSeconds : nil }),
+            meanIntensity: mean(sessions.compactMap { $0.estimatedIntensity > 0 ? $0.estimatedIntensity : nil }),
+            meanPercentCompleted: mean(sessions.compactMap { $0.percentCompleted > 0 ? $0.percentCompleted : nil })
+        )
     }
 }
 
@@ -159,6 +227,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
             return ExerciseListItem(
                 id: exercise.objectID,
                 name: exercise.name ?? "Untitled Exercise",
+                primaryMuscleColorHex: exercise.primaryMuscle?.colorHex ?? "8AC5FF",
                 repType: configuration.repType,
                 difficultyType: configuration.difficultyType,
                 targetRestSeconds: Int(exercise.targetRestSeconds)
@@ -252,6 +321,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
         return ExerciseListItem(
             id: exercise.objectID,
             name: name,
+            primaryMuscleColorHex: primary.colorHex ?? "8AC5FF",
             repType: input.repType,
             difficultyType: input.difficultyType,
             targetRestSeconds: input.targetRestSeconds

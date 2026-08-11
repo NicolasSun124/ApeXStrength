@@ -58,7 +58,12 @@ struct ExercisesView: View {
                         ApeCard {
                             HStack {
                                 VStack(alignment: .leading, spacing: ApeSpacing.xs) {
-                                    Text(exercise.name).font(.apeHeadline).foregroundStyle(ApeColor.textPrimary)
+                                    HStack(spacing: ApeSpacing.xs) {
+                                        Circle()
+                                            .fill(Color(hex: exercise.primaryMuscleColorHex))
+                                            .frame(width: 14, height: 14)
+                                        Text(exercise.name).font(.apeHeadline).foregroundStyle(ApeColor.textPrimary)
+                                    }
                                     HStack {
                                         ApeTag(title: exercise.repType.title)
                                         ApeTag(title: exercise.difficultyType.title)

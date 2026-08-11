@@ -1,5 +1,6 @@
 import CoreData
 import Foundation
+import SwiftUI
 
 @MainActor
 final class WorkoutsViewModel: ObservableObject {
@@ -29,6 +30,7 @@ final class CreateWorkoutViewModel: ObservableObject {
     @Published var name = ""
     @Published var selectedExercises: [ExerciseListItem] = []
     @Published var selectedTagIDs: Set<NSManagedObjectID> = []
+    @Published var plannedSets: [NSManagedObjectID: [WorkoutSetDraft]] = [:]
     @Published private(set) var exercises: [ExerciseListItem] = []
     @Published private(set) var tags: [TagItem] = []
     @Published private(set) var errorMessage: String?
@@ -53,8 +55,30 @@ final class CreateWorkoutViewModel: ObservableObject {
         selectedExercises.append(contentsOf: exercises.filter { ids.contains($0.id) && !alreadySelected.contains($0.id) })
     }
 
-    func removeExercises(at offsets: IndexSet) { selectedExercises.remove(atOffsets: offsets) }
+    func removeExercises(at offsets: IndexSet) {
+        let ids = offsets.map { selectedExercises[$0].id }
+        selectedExercises.remove(atOffsets: offsets)
+        ids.forEach { plannedSets.removeValue(forKey: $0) }
+    }
     func moveExercises(from source: IndexSet, to destination: Int) { selectedExercises.move(fromOffsets: source, toOffset: destination) }
+
+    func addSet(to exerciseID: NSManagedObjectID) {
+        plannedSets[exerciseID, default: []].append(WorkoutSetDraft())
+    }
+
+    func removeSet(_ setID: UUID, from exerciseID: NSManagedObjectID) {
+        plannedSets[exerciseID]?.removeAll { $0.id == setID }
+    }
+
+    func setBinding(for exerciseID: NSManagedObjectID, setID: UUID) -> Binding<WorkoutSetDraft> {
+        Binding(
+            get: { self.plannedSets[exerciseID]?.first(where: { $0.id == setID }) ?? WorkoutSetDraft() },
+            set: { updated in
+                guard let index = self.plannedSets[exerciseID]?.firstIndex(where: { $0.id == setID }) else { return }
+                self.plannedSets[exerciseID]?[index] = updated
+            }
+        )
+    }
 
     func addTag(named rawName: String) {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,7 +104,18 @@ final class CreateWorkoutViewModel: ObservableObject {
             try repository.createWorkout(NewWorkout(
                 name: name,
                 exerciseIDs: selectedExercises.map(\.id),
-                selectedTagIDs: selectedTagIDs
+                selectedTagIDs: selectedTagIDs,
+                plannedSetsByExerciseID: Dictionary(uniqueKeysWithValues: selectedExercises.map { exercise in
+                    let sets = (plannedSets[exercise.id] ?? []).map { draft in
+                        NewPlannedSet(
+                            reps: exercise.repType == .reps ? Int(draft.performanceValue) : nil,
+                            timeSeconds: exercise.repType == .time ? Double(draft.performanceValue) : nil,
+                            distance: exercise.repType == .distance ? Decimal(string: draft.performanceValue) : nil,
+                            weight: exercise.difficultyType == .bodyweight ? nil : Decimal(string: draft.weightValue)
+                        )
+                    }
+                    return (exercise.id, sets)
+                })
             ))
             return true
         } catch {
