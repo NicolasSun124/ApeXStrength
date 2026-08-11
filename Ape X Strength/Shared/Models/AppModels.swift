@@ -8,6 +8,41 @@ struct WorkoutListItem: Identifiable, Equatable {
     let updatedAt: Date
 }
 
+struct TagItem: Identifiable, Hashable {
+    let id: NSManagedObjectID
+    let name: String
+
+    var color: TagColor { TagColor(name: name) }
+}
+
+struct TagColor: Hashable {
+    let red: Double
+    let green: Double
+    let blue: Double
+
+    init(name: String) {
+        let palette: [(Double, Double, Double)] = [
+            (0.39, 0.95, 0.73),
+            (0.66, 1.00, 0.38),
+            (0.10, 0.12, 0.96),
+            (1.00, 0.49, 0.62),
+            (1.00, 0.73, 0.28),
+            (0.55, 0.66, 1.00)
+        ]
+        let value = name.unicodeScalars.reduce(0) { ($0 &* 31) &+ Int($1.value) }
+        let selected = palette[abs(value) % palette.count]
+        red = selected.0
+        green = selected.1
+        blue = selected.2
+    }
+}
+
+struct NewWorkout {
+    let name: String
+    let exerciseIDs: [NSManagedObjectID]
+    let selectedTagIDs: Set<NSManagedObjectID>
+}
+
 struct ExerciseListItem: Identifiable, Equatable {
     let id: NSManagedObjectID
     let name: String

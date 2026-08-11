@@ -12,7 +12,10 @@ struct RootTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            WorkoutsView(viewModel: WorkoutsViewModel(repository: dependencies.workouts))
+            WorkoutsView(
+                viewModel: WorkoutsViewModel(repository: dependencies.workouts),
+                repository: dependencies.workouts
+            )
                 .tabItem { Label("Workouts", systemImage: "dumbbell.fill") }
                 .tag(AppTab.workouts)
 

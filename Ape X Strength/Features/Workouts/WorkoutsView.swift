@@ -2,9 +2,12 @@ import SwiftUI
 
 struct WorkoutsView: View {
     @StateObject private var viewModel: WorkoutsViewModel
+    @State private var isCreatingWorkout = false
+    private let repository: any WorkoutRepository
 
-    init(viewModel: @autoclosure @escaping () -> WorkoutsViewModel) {
+    init(viewModel: @autoclosure @escaping () -> WorkoutsViewModel, repository: any WorkoutRepository) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.repository = repository
     }
 
     var body: some View {
@@ -21,7 +24,7 @@ struct WorkoutsView: View {
                         title: "Build your first workout",
                         message: "Create a reusable workout and add exercises and planned sets.",
                         actionTitle: "Create Workout",
-                        action: { }
+                        action: { isCreatingWorkout = true }
                     )
                 case .loaded:
                     workoutList
@@ -33,8 +36,13 @@ struct WorkoutsView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
-                Button(action: { }) { Image(systemName: "plus") }
+                Button(action: { isCreatingWorkout = true }) { Image(systemName: "plus") }
                     .accessibilityLabel("Create workout")
+            }
+            .navigationDestination(isPresented: $isCreatingWorkout) {
+                CreateWorkoutView(viewModel: CreateWorkoutViewModel(repository: repository)) {
+                    viewModel.didCreateWorkout()
+                }
             }
         }
         .task { if viewModel.state == .idle { viewModel.load() } }

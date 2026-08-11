@@ -4,6 +4,10 @@ import Foundation
 @MainActor
 protocol WorkoutRepository {
     func fetchWorkouts() throws -> [WorkoutListItem]
+    func fetchAvailableExercises() throws -> [ExerciseListItem]
+    func fetchTags() throws -> [TagItem]
+    @discardableResult func createTag(named name: String) throws -> TagItem
+    @discardableResult func createWorkout(_ input: NewWorkout) throws -> WorkoutListItem
 }
 
 @MainActor
@@ -34,6 +38,105 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 exerciseCount: workout.templateExercises?.count ?? 0,
                 updatedAt: workout.updatedAt ?? .distantPast
             )
+        }
+    }
+
+    func fetchAvailableExercises() throws -> [ExerciseListItem] {
+        let request = Exercise.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
+        request.predicate = NSPredicate(format: "isArchived == NO")
+        return try context.fetch(request).map { exercise in
+            let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
+            return ExerciseListItem(
+                id: exercise.objectID,
+                name: exercise.name ?? "Untitled Exercise",
+                repType: configuration.repType,
+                difficultyType: configuration.difficultyType,
+                targetRestSeconds: Int(exercise.targetRestSeconds)
+            )
+        }
+    }
+
+    func fetchTags() throws -> [TagItem] {
+        let request = Tag.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
+        return try context.fetch(request).map { TagItem(id: $0.objectID, name: $0.name ?? "Untitled") }
+    }
+
+    @discardableResult
+    func createTag(named rawName: String) throws -> TagItem {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw WorkoutRepositoryError.tagNameRequired }
+
+        let request = Tag.fetchRequest()
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(format: "name =[c] %@", name)
+        if let existing = try context.fetch(request).first {
+            return TagItem(id: existing.objectID, name: existing.name ?? name)
+        }
+
+        let tag = Tag(context: context)
+        tag.clientUUID = UUID()
+        tag.name = name
+        tag.syncState = "pendingCreate"
+        do {
+            try context.save()
+        } catch {
+            context.delete(tag)
+            throw error
+        }
+        return TagItem(id: tag.objectID, name: name)
+    }
+
+    @discardableResult
+    func createWorkout(_ input: NewWorkout) throws -> WorkoutListItem {
+        let name = input.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw WorkoutRepositoryError.nameRequired }
+        guard !input.exerciseIDs.isEmpty else { throw WorkoutRepositoryError.exerciseRequired }
+
+        let workout = WorkoutTemplate(context: context)
+        workout.clientUUID = UUID()
+        workout.createdAt = Date()
+        workout.updatedAt = Date()
+        workout.name = name
+        workout.syncState = "pendingCreate"
+
+        let exercises = try input.exerciseIDs.enumerated().map { position, id in
+            guard let exercise = try context.existingObject(with: id) as? Exercise else {
+                throw WorkoutRepositoryError.exerciseNotFound
+            }
+            let item = TemplateExercise(context: context)
+            item.clientUUID = UUID()
+            item.position = Int32(position)
+            item.syncState = "pendingCreate"
+            item.exercise = exercise
+            item.workoutTemplate = workout
+            return item
+        }
+        workout.templateExercises = NSOrderedSet(array: exercises)
+
+        let tags = try input.selectedTagIDs.compactMap { try context.existingObject(with: $0) as? Tag }
+        workout.tags = Set(tags) as NSSet
+
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+        return WorkoutListItem(id: workout.objectID, name: name, exerciseCount: exercises.count, updatedAt: workout.updatedAt ?? Date())
+    }
+}
+
+enum WorkoutRepositoryError: LocalizedError {
+    case nameRequired, exerciseRequired, exerciseNotFound, tagNameRequired
+
+    var errorDescription: String? {
+        switch self {
+        case .nameRequired: "Enter a workout name."
+        case .exerciseRequired: "Add at least one exercise."
+        case .exerciseNotFound: "One of the selected exercises is no longer available."
+        case .tagNameRequired: "Enter a tag name."
         }
     }
 }
