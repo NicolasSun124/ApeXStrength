@@ -2,9 +2,12 @@ import SwiftUI
 
 struct ExercisesView: View {
     @StateObject private var viewModel: ExercisesViewModel
+    @State private var isCreatingExercise = false
+    private let repository: any ExerciseRepository
 
-    init(viewModel: @autoclosure @escaping () -> ExercisesViewModel) {
+    init(viewModel: @autoclosure @escaping () -> ExercisesViewModel, repository: any ExerciseRepository) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.repository = repository
     }
 
     var body: some View {
@@ -19,9 +22,9 @@ struct ExercisesView: View {
                     ApeEmptyState(
                         icon: "figure.strengthtraining.traditional",
                         title: "No exercises yet",
-                        message: "Your exercise library will appear here.",
-                        actionTitle: "Add Exercise",
-                        action: { }
+                        message: "Create an exercise to start building your library.",
+                        actionTitle: "Create Exercise",
+                        action: { isCreatingExercise = true }
                     )
                 case .loaded:
                     exerciseList
@@ -33,8 +36,13 @@ struct ExercisesView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
-                Button(action: { }) { Image(systemName: "plus") }
-                    .accessibilityLabel("Add exercise")
+                Button("Create Exercise", systemImage: "plus") { isCreatingExercise = true }
+                    .accessibilityLabel("Create exercise")
+            }
+            .sheet(isPresented: $isCreatingExercise) {
+                CreateExerciseView(viewModel: CreateExerciseViewModel(repository: repository)) {
+                    viewModel.didCreateExercise()
+                }
             }
         }
         .task { if viewModel.state == .idle { viewModel.load() } }
@@ -44,25 +52,36 @@ struct ExercisesView: View {
         ScrollView {
             LazyVStack(spacing: ApeSpacing.sm) {
                 ForEach(viewModel.exercises) { exercise in
-                    ApeCard {
-                        HStack {
-                            VStack(alignment: .leading, spacing: ApeSpacing.xs) {
-                                Text(exercise.name).font(.apeHeadline).foregroundStyle(ApeColor.textPrimary)
-                                HStack {
-                                    ApeTag(title: exercise.trackingType.replacingOccurrences(of: "_", with: " "))
-                                    Text("\(exercise.targetRestSeconds)s rest")
-                                        .font(.apeCaption).foregroundStyle(ApeColor.textSecondary)
+                    NavigationLink {
+                        ExerciseDetailView(viewModel: ExerciseDetailViewModel(id: exercise.id, repository: repository))
+                    } label: {
+                        ApeCard {
+                            HStack {
+                                VStack(alignment: .leading, spacing: ApeSpacing.xs) {
+                                    Text(exercise.name).font(.apeHeadline).foregroundStyle(ApeColor.textPrimary)
+                                    HStack {
+                                        ApeTag(title: exercise.repType.title)
+                                        ApeTag(title: exercise.difficultyType.title)
+                                        Text(restLabel(exercise.targetRestSeconds))
+                                            .font(.apeCaption).foregroundStyle(ApeColor.textSecondary)
+                                    }
                                 }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.apeCaption).foregroundStyle(ApeColor.textSecondary)
                             }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.apeCaption).foregroundStyle(ApeColor.textSecondary)
                         }
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(ApeSpacing.md)
         }
         .refreshable { viewModel.load() }
     }
+}
+
+func restLabel(_ seconds: Int) -> String {
+    if seconds >= 60, seconds % 60 == 0 { return "\(seconds / 60) min rest" }
+    return "\(seconds)s rest"
 }

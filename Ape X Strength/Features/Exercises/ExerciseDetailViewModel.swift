@@ -1,27 +1,25 @@
+import CoreData
 import Foundation
 
 @MainActor
-final class ExercisesViewModel: ObservableObject {
+final class ExerciseDetailViewModel: ObservableObject {
     @Published private(set) var state: ViewLoadState = .idle
-    @Published private(set) var exercises: [ExerciseListItem] = []
-
+    @Published private(set) var exercise: ExerciseDetail?
+    private let id: NSManagedObjectID
     private let repository: any ExerciseRepository
 
-    init(repository: any ExerciseRepository) {
+    init(id: NSManagedObjectID, repository: any ExerciseRepository) {
+        self.id = id
         self.repository = repository
     }
 
     func load() {
         state = .loading
         do {
-            exercises = try repository.fetchExercises()
+            exercise = try repository.fetchExercise(id: id)
             state = .loaded
         } catch {
             state = .failed(error.localizedDescription)
         }
-    }
-
-    func didCreateExercise() {
-        load()
     }
 }

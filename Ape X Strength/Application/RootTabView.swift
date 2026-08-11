@@ -16,7 +16,10 @@ struct RootTabView: View {
                 .tabItem { Label("Workouts", systemImage: "dumbbell.fill") }
                 .tag(AppTab.workouts)
 
-            ExercisesView(viewModel: ExercisesViewModel(repository: dependencies.exercises))
+            ExercisesView(
+                viewModel: ExercisesViewModel(repository: dependencies.exercises),
+                repository: dependencies.exercises
+            )
                 .tabItem { Label("Exercises", systemImage: "figure.strengthtraining.traditional") }
                 .tag(AppTab.exercises)
 
