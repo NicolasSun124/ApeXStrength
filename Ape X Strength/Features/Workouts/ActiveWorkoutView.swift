@@ -4,12 +4,14 @@ import SwiftUI
 struct ActiveWorkoutView: View {
     let workout: WorkoutPreview
     private let repository: any WorkoutRepository
+    @Environment(\.dismiss) private var dismiss
     @State private var exercises: [ActiveWorkoutExercise]
     @State private var availableExercises: [ExerciseListItem] = []
     @State private var isSelectingExercise = false
     @State private var startedAt = Date()
     @State private var restTimerEnd: Date?
     @State private var isRestTimerPresented = false
+    @State private var isConfirmingAbort = false
 
     init(workout: WorkoutPreview, repository: any WorkoutRepository) {
         self.workout = workout
@@ -61,6 +63,19 @@ struct ActiveWorkoutView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(ApeColor.primarySoft)
         }
+        .confirmationDialog(
+            "Abort this session?",
+            isPresented: $isConfirmingAbort,
+            titleVisibility: .visible
+        ) {
+            Button("Abort Session", role: .destructive) {
+                restTimerEnd = nil
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your active session and all of its progress will be deleted without being saved.")
+        }
         .task { loadAvailableExercises() }
         .task(id: restTimerEnd) { await clearRestTimerWhenFinished() }
     }
@@ -89,7 +104,11 @@ struct ActiveWorkoutView: View {
 
             Spacer()
 
-            Button(action: {}) {
+            Menu {
+                Button("Abort Session", systemImage: "xmark.circle", role: .destructive) {
+                    isConfirmingAbort = true
+                }
+            } label: {
                 Image(systemName: "ellipsis")
                     .foregroundStyle(ApeColor.textPrimary)
                     .frame(width: 42, height: 42)
