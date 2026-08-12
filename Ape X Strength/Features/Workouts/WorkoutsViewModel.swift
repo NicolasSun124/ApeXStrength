@@ -26,6 +26,48 @@ final class WorkoutsViewModel: ObservableObject {
 }
 
 @MainActor
+final class WorkoutPreviewViewModel: ObservableObject {
+    @Published private(set) var state: ViewLoadState = .idle
+    @Published private(set) var workout: WorkoutPreview?
+    @Published private(set) var archiveErrorMessage: String?
+    @Published private(set) var isArchiving = false
+    private let workoutID: NSManagedObjectID
+    private let repository: any WorkoutRepository
+
+    init(workoutID: NSManagedObjectID, repository: any WorkoutRepository) {
+        self.workoutID = workoutID
+        self.repository = repository
+    }
+
+    func load() {
+        state = .loading
+        do {
+            workout = try repository.fetchWorkoutPreview(id: workoutID)
+            state = .loaded
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    func archive() -> Bool {
+        isArchiving = true
+        defer { isArchiving = false }
+        do {
+            try repository.archiveWorkout(id: workoutID)
+            archiveErrorMessage = nil
+            return true
+        } catch {
+            archiveErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func dismissArchiveError() {
+        archiveErrorMessage = nil
+    }
+}
+
+@MainActor
 final class CreateWorkoutViewModel: ObservableObject {
     @Published var name = ""
     @Published var selectedExercises: [ExerciseListItem] = []

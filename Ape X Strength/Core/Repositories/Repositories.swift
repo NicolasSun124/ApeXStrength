@@ -4,6 +4,8 @@ import Foundation
 @MainActor
 protocol WorkoutRepository {
     func fetchWorkouts() throws -> [WorkoutListItem]
+    func fetchWorkoutPreview(id: NSManagedObjectID) throws -> WorkoutPreview
+    func archiveWorkout(id: NSManagedObjectID) throws
     func fetchAvailableExercises() throws -> [ExerciseListItem]
     func fetchTags() throws -> [TagItem]
     @discardableResult func createTag(named name: String) throws -> TagItem
@@ -50,6 +52,84 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         }
     }
 
+    func fetchWorkoutPreview(id: NSManagedObjectID) throws -> WorkoutPreview {
+        guard let workout = try context.existingObject(with: id) as? WorkoutTemplate,
+              !workout.isDeleted,
+              !workout.isArchived else {
+            throw WorkoutRepositoryError.workoutNotFound
+        }
+
+        let templateExercises = (workout.templateExercises?.array as? [TemplateExercise] ?? [])
+            .sorted { $0.position < $1.position }
+
+        return WorkoutPreview(
+            name: workout.name ?? "Untitled Workout",
+            tags: (workout.tags as? Set<Tag> ?? [])
+                .compactMap { tag in
+                    guard let name = tag.name else { return nil }
+                    return WorkoutTagSummary(name: name, color: TagColor(name: name))
+                }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
+            exercises: templateExercises.compactMap { templateExercise in
+                guard let exercise = templateExercise.exercise else { return nil }
+                let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
+                let previousSets = latestCompletedSets(for: exercise)
+                let plannedSets = (templateExercise.plannedSets?.array as? [TemplatePlannedSet] ?? [])
+                    .sorted { $0.setNumber < $1.setNumber }
+
+                return WorkoutPreviewExercise(
+                    id: exercise.objectID,
+                    name: exercise.name ?? "Untitled Exercise",
+                    primaryMuscleColorHex: exercise.primaryMuscle?.colorHex ?? "8AC5FF",
+                    repType: configuration.repType,
+                    difficultyType: configuration.difficultyType,
+                    targetRestSeconds: Int(exercise.targetRestSeconds),
+                    sets: plannedSets.enumerated().map { index, plannedSet in
+                        let setNumber = plannedSet.setNumber > 0 ? Int(plannedSet.setNumber) : index + 1
+                        let previous = previousSets.first { Int($0.setNumber) == setNumber }
+                        return WorkoutPreviewSet(
+                            number: setNumber,
+                            reps: previous.map { Int($0.reps) } ?? 0,
+                            timeSeconds: previous?.timeSeconds ?? 0,
+                            distance: previous?.distance as Decimal? ?? 0,
+                            weight: previous?.weight as Decimal? ?? 0
+                        )
+                    }
+                )
+            }
+        )
+    }
+
+    func archiveWorkout(id: NSManagedObjectID) throws {
+        guard let workout = try context.existingObject(with: id) as? WorkoutTemplate,
+              !workout.isDeleted,
+              !workout.isArchived else {
+            throw WorkoutRepositoryError.workoutNotFound
+        }
+
+        workout.isArchived = true
+        workout.updatedAt = Date()
+        workout.syncState = "pendingUpdate"
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    private func latestCompletedSets(for exercise: Exercise) -> [SessionSet] {
+        let occurrences = (exercise.sessionExercises as? Set<SessionExercise> ?? [])
+            .filter { $0.session?.endedAt != nil }
+            .sorted {
+                ($0.session?.endedAt ?? .distantPast) > ($1.session?.endedAt ?? .distantPast)
+            }
+        guard let latest = occurrences.first else { return [] }
+        return (latest.sets?.array as? [SessionSet] ?? [])
+            .filter(\.completed)
+            .sorted { $0.setNumber < $1.setNumber }
+    }
+
     func fetchAvailableExercises() throws -> [ExerciseListItem] {
         let request = Exercise.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
@@ -70,7 +150,30 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
     func fetchTags() throws -> [TagItem] {
         let request = Tag.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
-        return try context.fetch(request).map { TagItem(id: $0.objectID, name: $0.name ?? "Untitled") }
+        var tags = try context.fetch(request)
+        let existingNames = Set(tags.compactMap(\.name).map { $0.lowercased() })
+        let missingNames = Self.defaultTags.filter { !existingNames.contains($0.lowercased()) }
+
+        if !missingNames.isEmpty {
+            let insertedTags = missingNames.map { name in
+                let tag = Tag(context: context)
+                tag.clientUUID = UUID()
+                tag.name = name
+                tag.syncState = "synced"
+                return tag
+            }
+            tags.append(contentsOf: insertedTags)
+            do {
+                try context.save()
+            } catch {
+                insertedTags.forEach(context.delete)
+                throw error
+            }
+        }
+
+        return tags
+            .sorted { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+            .map { TagItem(id: $0.objectID, name: $0.name ?? "Untitled") }
     }
 
     @discardableResult
@@ -194,10 +297,35 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             meanPercentCompleted: mean(sessions.compactMap { $0.percentCompleted > 0 ? $0.percentCompleted : nil })
         )
     }
+
+    private static let defaultTags = [
+        "Upper",
+        "Lower",
+        "Core",
+        "Push",
+        "Pull",
+        "Legs",
+        "Back",
+        "Chest",
+        "Hypertrophy",
+        "Strength",
+        "Plyometrics",
+        "Calisthenics",
+        "Circuit",
+        "Beginner",
+        "Intermediate",
+        "Advanced",
+        "Endurance",
+        "Flexibility",
+        "Stability",
+        "Cardio",
+        "Functional",
+        "Bodyweight"
+    ]
 }
 
 enum WorkoutRepositoryError: LocalizedError {
-    case nameRequired, exerciseRequired, exerciseNotFound, tagNameRequired
+    case nameRequired, exerciseRequired, exerciseNotFound, tagNameRequired, workoutNotFound
 
     var errorDescription: String? {
         switch self {
@@ -205,6 +333,7 @@ enum WorkoutRepositoryError: LocalizedError {
         case .exerciseRequired: "Add at least one exercise."
         case .exerciseNotFound: "One of the selected exercises is no longer available."
         case .tagNameRequired: "Enter a tag name."
+        case .workoutNotFound: "This workout is no longer available."
         }
     }
 }

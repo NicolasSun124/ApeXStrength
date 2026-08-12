@@ -10,6 +10,31 @@ struct WorkoutListItem: Identifiable, Equatable {
     let statistics: WorkoutStatistics
 }
 
+struct WorkoutPreview: Equatable {
+    let name: String
+    let tags: [WorkoutTagSummary]
+    let exercises: [WorkoutPreviewExercise]
+}
+
+struct WorkoutPreviewExercise: Identifiable, Equatable {
+    let id: NSManagedObjectID
+    let name: String
+    let primaryMuscleColorHex: String
+    let repType: ExerciseRepType
+    let difficultyType: ExerciseDifficultyType
+    let targetRestSeconds: Int
+    let sets: [WorkoutPreviewSet]
+}
+
+struct WorkoutPreviewSet: Identifiable, Equatable {
+    var id: Int { number }
+    let number: Int
+    let reps: Int
+    let timeSeconds: Double
+    let distance: Decimal
+    let weight: Decimal
+}
+
 struct WorkoutTagSummary: Identifiable, Equatable {
     var id: String { name }
     let name: String
@@ -47,19 +72,57 @@ struct TagColor: Hashable {
     let blue: Double
 
     init(name: String) {
-        let palette: [(Double, Double, Double)] = [
-            (0.39, 0.95, 0.73),
-            (0.66, 1.00, 0.38),
-            (0.10, 0.12, 0.96),
-            (1.00, 0.49, 0.62),
-            (1.00, 0.73, 0.28),
-            (0.55, 0.66, 1.00)
+        let premadeTags = [
+            "upper", "lower", "core", "push", "pull", "legs", "back", "chest",
+            "hypertrophy", "strength", "plyometrics", "calisthenics", "circuit",
+            "beginner", "intermediate", "advanced", "endurance", "flexibility",
+            "stability", "cardio", "functional", "bodyweight"
         ]
-        let value = name.unicodeScalars.reduce(0) { ($0 &* 31) &+ Int($1.value) }
-        let selected = palette[abs(value) % palette.count]
-        red = selected.0
-        green = selected.1
-        blue = selected.2
+        let normalizedName = name.lowercased()
+        let hue: Double
+        let saturation: Double
+        let lightness: Double
+
+        if let index = premadeTags.firstIndex(of: normalizedName) {
+            hue = Double(index) / Double(premadeTags.count)
+            saturation = index.isMultiple(of: 2) ? 0.82 : 0.68
+            lightness = index.isMultiple(of: 3) ? 0.62 : 0.54
+        } else {
+            let hash = name.unicodeScalars.reduce(UInt64(14_695_981_039_346_656_037)) {
+                ($0 ^ UInt64($1.value)) &* 1_099_511_628_211
+            }
+            hue = Double(hash % 360) / 360
+            saturation = 0.72
+            lightness = 0.58
+        }
+
+        let rgb = Self.rgb(hue: hue, saturation: saturation, lightness: lightness)
+        red = rgb.red
+        green = rgb.green
+        blue = rgb.blue
+    }
+
+    private static func rgb(
+        hue: Double,
+        saturation: Double,
+        lightness: Double
+    ) -> (red: Double, green: Double, blue: Double) {
+        let chroma = (1 - abs(2 * lightness - 1)) * saturation
+        let sector = hue * 6
+        let x = chroma * (1 - abs(sector.truncatingRemainder(dividingBy: 2) - 1))
+        let base: (Double, Double, Double)
+
+        switch sector {
+        case 0..<1: base = (chroma, x, 0)
+        case 1..<2: base = (x, chroma, 0)
+        case 2..<3: base = (0, chroma, x)
+        case 3..<4: base = (0, x, chroma)
+        case 4..<5: base = (x, 0, chroma)
+        default: base = (chroma, 0, x)
+        }
+
+        let match = lightness - chroma / 2
+        return (base.0 + match, base.1 + match, base.2 + match)
     }
 }
 

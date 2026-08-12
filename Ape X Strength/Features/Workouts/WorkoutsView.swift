@@ -52,7 +52,16 @@ struct WorkoutsView: View {
         ScrollView {
             LazyVStack(spacing: ApeSpacing.sm) {
                 ForEach(viewModel.workouts) { workout in
-                    WorkoutCollectionCard(workout: workout)
+                    NavigationLink {
+                        WorkoutPreviewView(
+                            viewModel: WorkoutPreviewViewModel(workoutID: workout.id, repository: repository),
+                            repository: repository,
+                            onArchived: viewModel.load
+                        )
+                    } label: {
+                        WorkoutCollectionCard(workout: workout)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(ApeSpacing.md)
