@@ -6,6 +6,7 @@ protocol WorkoutRepository {
     func fetchWorkouts() throws -> [WorkoutListItem]
     func fetchWorkoutPreview(id: NSManagedObjectID) throws -> WorkoutPreview
     func archiveWorkout(id: NSManagedObjectID) throws
+    func saveCompletedSession(_ input: CompletedWorkoutSession) throws
     func fetchAvailableExercises() throws -> [ExerciseListItem]
     func fetchTags() throws -> [TagItem]
     @discardableResult func createTag(named name: String) throws -> TagItem
@@ -63,6 +64,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             .sorted { $0.position < $1.position }
 
         return WorkoutPreview(
+            id: workout.objectID,
             name: workout.name ?? "Untitled Workout",
             tags: (workout.tags as? Set<Tag> ?? [])
                 .compactMap { tag in
@@ -110,6 +112,75 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         workout.isArchived = true
         workout.updatedAt = Date()
         workout.syncState = "pendingUpdate"
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    func saveCompletedSession(_ input: CompletedWorkoutSession) throws {
+        guard let workout = try context.existingObject(with: input.workoutID) as? WorkoutTemplate,
+              !workout.isDeleted,
+              !workout.isArchived else {
+            throw WorkoutRepositoryError.workoutNotFound
+        }
+
+        let session = WorkoutSession(context: context)
+        session.clientUUID = UUID()
+        session.startedAt = input.startedAt
+        session.endedAt = input.endedAt
+        session.durationSeconds = Int64(max(0, input.endedAt.timeIntervalSince(input.startedAt)))
+        session.rating = Int16(input.rating)
+        session.syncState = "pendingCreate"
+        session.workoutTemplate = workout
+        session.user = workout.user
+
+        var completedSetCount = 0
+        var totalSetCount = 0
+        var totalVolume = Decimal.zero
+        let sessionExercises = try input.exercises.enumerated().map { position, inputExercise in
+            guard let exercise = try context.existingObject(with: inputExercise.exerciseID) as? Exercise else {
+                throw WorkoutRepositoryError.exerciseNotFound
+            }
+            let sessionExercise = SessionExercise(context: context)
+            sessionExercise.clientUUID = UUID()
+            sessionExercise.position = Int32(position)
+            sessionExercise.syncState = "pendingCreate"
+            sessionExercise.exercise = exercise
+            sessionExercise.session = session
+
+            let sets = inputExercise.sets.map { inputSet in
+                let set = SessionSet(context: context)
+                set.clientUUID = UUID()
+                set.setNumber = Int32(inputSet.number)
+                set.reps = Int32(inputSet.reps)
+                set.timeSeconds = inputSet.timeSeconds
+                set.distance = NSDecimalNumber(decimal: inputSet.distance)
+                set.weight = NSDecimalNumber(decimal: inputSet.weight)
+                set.completed = inputSet.completed
+                set.completedAt = inputSet.completed ? input.endedAt : nil
+                set.isWarmup = false
+                set.syncState = "pendingCreate"
+                set.sessionExercise = sessionExercise
+                totalSetCount += 1
+                if inputSet.completed {
+                    completedSetCount += 1
+                    totalVolume += Decimal(inputSet.reps) * inputSet.weight
+                }
+                return set
+            }
+            sessionExercise.sets = NSOrderedSet(array: sets)
+            return sessionExercise
+        }
+        session.sessionExercises = NSOrderedSet(array: sessionExercises)
+        session.volumeWeight = NSDecimalNumber(decimal: totalVolume)
+        session.percentCompleted = totalSetCount == 0
+            ? 0
+            : Double(completedSetCount) / Double(totalSetCount) * 100
+
+        workout.updatedAt = input.endedAt
         do {
             try context.save()
         } catch {

@@ -11,9 +11,32 @@ struct WorkoutListItem: Identifiable, Equatable {
 }
 
 struct WorkoutPreview: Equatable {
+    let id: NSManagedObjectID
     let name: String
     let tags: [WorkoutTagSummary]
     let exercises: [WorkoutPreviewExercise]
+}
+
+struct CompletedWorkoutSession {
+    let workoutID: NSManagedObjectID
+    let startedAt: Date
+    let endedAt: Date
+    let rating: Int
+    let exercises: [CompletedSessionExercise]
+}
+
+struct CompletedSessionExercise {
+    let exerciseID: NSManagedObjectID
+    let sets: [CompletedSessionSet]
+}
+
+struct CompletedSessionSet {
+    let number: Int
+    let reps: Int
+    let timeSeconds: Double
+    let distance: Decimal
+    let weight: Decimal
+    let completed: Bool
 }
 
 struct WorkoutPreviewExercise: Identifiable, Equatable {

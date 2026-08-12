@@ -4,6 +4,7 @@ import SwiftUI
 struct ActiveWorkoutView: View {
     let workout: WorkoutPreview
     private let repository: any WorkoutRepository
+    private let onSessionSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var exercises: [ActiveWorkoutExercise]
     @State private var availableExercises: [ExerciseListItem] = []
@@ -12,10 +13,16 @@ struct ActiveWorkoutView: View {
     @State private var restTimerEnd: Date?
     @State private var isRestTimerPresented = false
     @State private var isConfirmingAbort = false
+    @State private var isShowingFinishSummary = false
 
-    init(workout: WorkoutPreview, repository: any WorkoutRepository) {
+    init(
+        workout: WorkoutPreview,
+        repository: any WorkoutRepository,
+        onSessionSaved: @escaping () -> Void = {}
+    ) {
         self.workout = workout
         self.repository = repository
+        self.onSessionSaved = onSessionSaved
         _exercises = State(initialValue: workout.exercises.map(ActiveWorkoutExercise.init))
         _startedAt = State(initialValue: Date())
     }
@@ -76,6 +83,14 @@ struct ActiveWorkoutView: View {
         } message: {
             Text("Your active session and all of its progress will be deleted without being saved.")
         }
+        .navigationDestination(isPresented: $isShowingFinishSummary) {
+            WorkoutFinishView(
+                workoutName: workout.name,
+                exerciseNames: exercises.map(\.name)
+            ) { shouldSave, rating in
+                finishSession(shouldSave: shouldSave, rating: rating)
+            }
+        }
         .task { loadAvailableExercises() }
         .task(id: restTimerEnd) { await clearRestTimerWhenFinished() }
     }
@@ -117,7 +132,7 @@ struct ActiveWorkoutView: View {
             }
             .accessibilityLabel("Workout options")
 
-            Button("Finish", action: {})
+            Button("Finish") { isShowingFinishSummary = true }
                 .font(.apeHeadline)
                 .foregroundStyle(ApeColor.background)
                 .padding(.horizontal, ApeSpacing.md)
@@ -198,6 +213,51 @@ struct ActiveWorkoutView: View {
 
     private func addExercise(_ exercise: ExerciseListItem) {
         exercises.append(ActiveWorkoutExercise(exercise: exercise))
+    }
+
+    private func finishSession(shouldSave: Bool, rating: Int) -> String? {
+        if shouldSave {
+            do {
+                try repository.saveCompletedSession(CompletedWorkoutSession(
+                    workoutID: workout.id,
+                    startedAt: startedAt,
+                    endedAt: Date(),
+                    rating: rating,
+                    exercises: exercises.map { exercise in
+                        CompletedSessionExercise(
+                            exerciseID: exercise.exerciseID,
+                            sets: exercise.sets.map { set in
+                                CompletedSessionSet(
+                                    number: set.number,
+                                    reps: set.reps,
+                                    timeSeconds: set.timeSeconds,
+                                    distance: set.distance,
+                                    weight: set.weight,
+                                    completed: set.isCompleted
+                                )
+                            }
+                        )
+                    }
+                ))
+                onSessionSaved()
+            } catch {
+                return error.localizedDescription
+            }
+        }
+
+        closeFinishedSession()
+        return nil
+    }
+
+    private func closeFinishedSession() {
+        restTimerEnd = nil
+        isShowingFinishSummary = false
+
+        // The summary must leave the navigation stack before its parent active
+        // workout can be dismissed. Otherwise SwiftUI ignores the parent dismiss.
+        DispatchQueue.main.async {
+            dismiss()
+        }
     }
 
     private func elapsedTime(at date: Date) -> String {

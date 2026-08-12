@@ -61,7 +61,11 @@ struct WorkoutPreviewView: View {
         }
         .navigationDestination(isPresented: $isStartingWorkout) {
             if let workout = viewModel.workout {
-                ActiveWorkoutView(workout: workout, repository: repository)
+                ActiveWorkoutView(
+                    workout: workout,
+                    repository: repository,
+                    onSessionSaved: onArchived
+                )
             }
         }
         .confirmationDialog(
