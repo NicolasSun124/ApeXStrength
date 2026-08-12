@@ -104,6 +104,10 @@ final class CreateWorkoutViewModel: ObservableObject {
     }
     func moveExercises(from source: IndexSet, to destination: Int) { selectedExercises.move(fromOffsets: source, toOffset: destination) }
 
+    func reorderExercises(_ exercises: [ExerciseListItem]) {
+        selectedExercises = exercises
+    }
+
     func addSet(to exerciseID: NSManagedObjectID) {
         plannedSets[exerciseID, default: []].append(WorkoutSetDraft())
     }

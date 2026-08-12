@@ -1,11 +1,13 @@
 import CoreData
 import SwiftUI
+import UIKit
 
 struct CreateWorkoutView: View {
     @StateObject private var viewModel: CreateWorkoutViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var isSelectingExercises = false
     @State private var isSelectingTags = false
+    @State private var isReorderingExercises = false
     @FocusState private var isNameFocused: Bool
     let onSaved: () -> Void
 
@@ -83,6 +85,11 @@ struct CreateWorkoutView: View {
                 onAdd: viewModel.addTag
             )
         }
+        .sheet(isPresented: $isReorderingExercises) {
+            ReorderExercisesView(exercises: viewModel.selectedExercises) {
+                viewModel.reorderExercises($0)
+            }
+        }
         .task { viewModel.load() }
     }
 
@@ -104,6 +111,9 @@ struct CreateWorkoutView: View {
                 }
                 Spacer()
                 Menu {
+                    Button("Reorder", systemImage: "arrow.up.arrow.down") {
+                        isReorderingExercises = true
+                    }
                     Button("Remove", systemImage: "trash", role: .destructive) {
                         if let index = viewModel.selectedExercises.firstIndex(where: { $0.id == exercise.id }) {
                             viewModel.removeExercises(at: IndexSet(integer: index))
@@ -192,6 +202,109 @@ struct CreateWorkoutView: View {
 
     private func weightPlaceholder(for difficultyType: ExerciseDifficultyType) -> String {
         difficultyType == .assistedWeight ? "Assisted" : "Weight"
+    }
+}
+
+private struct ReorderExercisesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var exercises: [ExerciseListItem]
+    let onFinish: ([ExerciseListItem]) -> Void
+
+    init(exercises: [ExerciseListItem], onFinish: @escaping ([ExerciseListItem]) -> Void) {
+        _exercises = State(initialValue: exercises)
+        self.onFinish = onFinish
+    }
+
+    var body: some View {
+        NavigationStack {
+            ExerciseReorderTable(exercises: $exercises)
+                .background(ApeColor.background)
+            .navigationTitle("Reorder Exercises")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Finish") {
+                        onFinish(exercises)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct ExerciseReorderTable: UIViewControllerRepresentable {
+    @Binding var exercises: [ExerciseListItem]
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(exercises: $exercises)
+    }
+
+    func makeUIViewController(context: Context) -> UITableViewController {
+        let controller = UITableViewController(style: .insetGrouped)
+        controller.tableView.dataSource = context.coordinator
+        controller.tableView.delegate = context.coordinator
+        controller.tableView.backgroundColor = UIColor(ApeColor.background)
+        controller.tableView.separatorColor = UIColor(ApeColor.control)
+        controller.tableView.allowsSelection = false
+        controller.tableView.setEditing(true, animated: false)
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UITableViewController, context: Context) {
+        context.coordinator.exercises = $exercises
+        let ids = exercises.map(\.id)
+        guard ids != context.coordinator.displayedIDs else { return }
+        context.coordinator.displayedIDs = ids
+        controller.tableView.reloadData()
+    }
+
+    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate {
+        var exercises: Binding<[ExerciseListItem]>
+        var displayedIDs: [NSManagedObjectID]
+
+        init(exercises: Binding<[ExerciseListItem]>) {
+            self.exercises = exercises
+            displayedIDs = exercises.wrappedValue.map(\.id)
+        }
+
+        func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+            exercises.wrappedValue.count
+        }
+
+        func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+            let reuseIdentifier = "ExerciseReorderCell"
+            let cell = tableView.dequeueReusableCell(withIdentifier: reuseIdentifier)
+                ?? UITableViewCell(style: .default, reuseIdentifier: reuseIdentifier)
+            let exercise = exercises.wrappedValue[indexPath.row]
+            var content = cell.defaultContentConfiguration()
+            content.image = UIImage(systemName: "circle.fill")
+            content.imageProperties.tintColor = UIColor(Color(hex: exercise.primaryMuscleColorHex))
+            content.imageProperties.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 18)
+            content.text = exercise.name
+            content.textProperties.color = UIColor(ApeColor.textPrimary)
+            content.textProperties.font = UIFont.preferredFont(forTextStyle: .headline)
+            cell.contentConfiguration = content
+            cell.backgroundColor = UIColor(ApeColor.surface)
+            cell.showsReorderControl = true
+            return cell
+        }
+
+        func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
+            true
+        }
+
+        func tableView(_ tableView: UITableView, moveRowAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
+            var reordered = exercises.wrappedValue
+            let exercise = reordered.remove(at: sourceIndexPath.row)
+            reordered.insert(exercise, at: destinationIndexPath.row)
+            displayedIDs = reordered.map(\.id)
+            exercises.wrappedValue = reordered
+        }
     }
 }
 
