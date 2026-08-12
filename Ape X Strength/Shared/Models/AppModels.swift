@@ -39,6 +39,31 @@ struct CompletedSessionSet {
     let completed: Bool
 }
 
+enum ImprovementTrend {
+    case improved
+    case maintained
+    case regressed
+    case firstEntry
+}
+
+struct ExerciseImprovementSummary: Identifiable {
+    let id: NSManagedObjectID
+    let exerciseName: String
+    let lifetime: ExerciseImprovementMetrics
+    let previous: ExerciseImprovementMetrics
+}
+
+struct ExerciseImprovementMetrics {
+    let metrics: [ImprovementMetric]
+}
+
+struct ImprovementMetric: Identifiable {
+    var id: String { title }
+    let title: String
+    let displayValue: String
+    let trend: ImprovementTrend
+}
+
 struct WorkoutPreviewExercise: Identifiable, Equatable {
     let id: NSManagedObjectID
     let name: String

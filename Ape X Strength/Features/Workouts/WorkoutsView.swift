@@ -174,8 +174,6 @@ private struct WorkoutCollectionCard: View {
             statisticRow("Last Used", value: workout.statistics.lastUsed?.formatted(date: .abbreviated, time: .shortened) ?? "–")
             statisticRow("Mean Duration", value: formatted(workout.statistics.meanDurationMinutes, suffix: " min"))
             statisticRow("Mean Volume", value: workout.statistics.meanVolume.map { "\($0) kg" } ?? "–")
-            statisticRow("Mean Rest", value: formatted(workout.statistics.meanRestSeconds, suffix: " s"))
-            statisticRow("Mean Intensity", value: formatted(workout.statistics.meanIntensity, suffix: "%"))
             statisticRow("Mean Completed", value: formatted(workout.statistics.meanPercentCompleted, suffix: "%"), showsDivider: false)
         }
     }

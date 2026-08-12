@@ -34,28 +34,70 @@ struct PersistenceController {
         user.createdAt = Date()
         user.preferredWeightUnit = "kg"
 
+        let muscle = Muscle(context: context)
+        muscle.serverID = UUID()
+        muscle.name = "Full Body"
+        muscle.colorHex = "8AC5FF"
+
         let workout = WorkoutTemplate(context: context)
         workout.clientUUID = UUID()
-        workout.name = "Push Strength"
+        workout.name = "Tracking Type Test"
         workout.createdAt = Date()
         workout.updatedAt = Date()
         workout.syncState = "synced"
         workout.user = user
 
-        let exercise = Exercise(context: context)
-        exercise.clientUUID = UUID()
-        exercise.name = "Barbell Bench Press"
-        exercise.createdAt = Date()
-        exercise.trackingType = "reps_weight"
-        exercise.targetRestSeconds = 120
-        exercise.syncState = "synced"
-        exercise.owner = user
+        let configurations = ExerciseRepType.allCases.flatMap { repType in
+            ExerciseDifficultyType.allCases.map { difficultyType in
+                ExerciseConfiguration(repType: repType, difficultyType: difficultyType)
+            }
+        }
 
-        let muscle = Muscle(context: context)
-        muscle.serverID = UUID()
-        muscle.name = "Upper Chest"
-        muscle.colorHex = "8AC5FF"
-        exercise.primaryMuscle = muscle
+        let templateExercises = configurations.enumerated().map { position, configuration in
+            let exercise = Exercise(context: context)
+            exercise.clientUUID = UUID()
+            exercise.name = "\(configuration.repType.title) + \(configuration.difficultyType.title)"
+            exercise.createdAt = Date()
+            exercise.trackingType = configuration.storageValue
+            exercise.targetRestSeconds = 120
+            exercise.syncState = "synced"
+            exercise.owner = user
+            exercise.primaryMuscle = muscle
+
+            let templateExercise = TemplateExercise(context: context)
+            templateExercise.clientUUID = UUID()
+            templateExercise.position = Int32(position)
+            templateExercise.syncState = "synced"
+            templateExercise.exercise = exercise
+            templateExercise.workoutTemplate = workout
+
+            let sets = (1...3).map { setNumber in
+                let set = TemplatePlannedSet(context: context)
+                set.clientUUID = UUID()
+                set.setNumber = Int32(setNumber)
+                set.syncState = "synced"
+                set.isWarmup = false
+                set.templateExercise = templateExercise
+
+                switch configuration.repType {
+                case .reps:
+                    set.plannedReps = Int32(8 + setNumber * 2)
+                case .time:
+                    set.plannedTimeSeconds = Double(20 + setNumber * 10)
+                case .distance:
+                    set.plannedDistance = NSDecimalNumber(value: setNumber * 100)
+                }
+
+                if configuration.difficultyType != .bodyweight {
+                    set.plannedWeight = NSDecimalNumber(value: 10 + setNumber * 5)
+                }
+
+                return set
+            }
+            templateExercise.plannedSets = NSOrderedSet(array: sets)
+            return templateExercise
+        }
+        workout.templateExercises = NSOrderedSet(array: templateExercises)
 
         try? context.save()
         return persistence

@@ -64,7 +64,13 @@ struct WorkoutPreviewView: View {
                 ActiveWorkoutView(
                     workout: workout,
                     repository: repository,
-                    onSessionSaved: onArchived
+                    onSessionSaved: {
+                        onArchived()
+                        isStartingWorkout = false
+                        DispatchQueue.main.async {
+                            dismiss()
+                        }
+                    }
                 )
             }
         }
@@ -164,16 +170,16 @@ struct WorkoutPreviewView: View {
                 HStack(spacing: ApeSpacing.xs) {
                     columnHeader("Set", width: 42)
                     columnHeader(performanceTitle(for: exercise.repType))
-                    if exercise.difficultyType != .bodyweight {
-                        columnHeader(exercise.difficultyType == .assistedWeight ? "Assisted" : "Weight")
-                    }
+                    columnHeader(exercise.difficultyType == .assistedWeight ? "Assisted" : "Weight")
                 }
 
                 ForEach(exercise.sets) { set in
                     HStack(spacing: ApeSpacing.xs) {
                         valueCell("\(set.number)", width: 42)
                         valueCell(performanceValue(set, repType: exercise.repType))
-                        if exercise.difficultyType != .bodyweight {
+                        if exercise.difficultyType == .bodyweight {
+                            valueCell("—")
+                        } else {
                             valueCell(decimalText(set.weight))
                         }
                     }
@@ -208,7 +214,7 @@ struct WorkoutPreviewView: View {
     private func performanceTitle(for repType: ExerciseRepType) -> String {
         switch repType {
         case .reps: "Reps"
-        case .time: "Time (s)"
+        case .time: "Time"
         case .distance: "Distance"
         }
     }
@@ -216,13 +222,14 @@ struct WorkoutPreviewView: View {
     private func performanceValue(_ set: WorkoutPreviewSet, repType: ExerciseRepType) -> String {
         switch repType {
         case .reps: "\(set.reps)"
-        case .time: numberText(set.timeSeconds)
+        case .time: formattedTime(set.timeSeconds)
         case .distance: decimalText(set.distance)
         }
     }
 
-    private func numberText(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(0...2)))
+    private func formattedTime(_ seconds: Double) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
     private func decimalText(_ value: Decimal) -> String {

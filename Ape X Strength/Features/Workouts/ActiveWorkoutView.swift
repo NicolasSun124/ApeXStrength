@@ -14,6 +14,10 @@ struct ActiveWorkoutView: View {
     @State private var isRestTimerPresented = false
     @State private var isConfirmingAbort = false
     @State private var isShowingFinishSummary = false
+    @State private var editingTimeSet: TimeSetTarget?
+    @State private var timePickerMinutes = 0
+    @State private var timePickerSeconds = 0
+    @FocusState private var isNumericFieldFocused: Bool
 
     init(
         workout: WorkoutPreview,
@@ -28,20 +32,29 @@ struct ActiveWorkoutView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: ApeSpacing.md) {
-                sessionControls
+        VStack(spacing: 0) {
+            sessionControls
+                .padding(.horizontal, ApeSpacing.md)
+                .padding(.vertical, ApeSpacing.sm)
+                .background(ApeColor.background)
 
-                ForEach($exercises) { $exercise in
-                    exerciseCard(exercise: $exercise)
-                }
+            Divider()
+                .overlay(ApeColor.divider.opacity(0.25))
 
-                Button { isSelectingExercise = true } label: {
-                    Label("Add Exercise", systemImage: "plus")
+            ScrollView {
+                VStack(spacing: ApeSpacing.md) {
+                    ForEach($exercises) { $exercise in
+                        exerciseCard(exercise: $exercise)
+                    }
+
+                    Button { isSelectingExercise = true } label: {
+                        Label("Add Exercise", systemImage: "plus")
+                    }
+                    .buttonStyle(ApeSecondaryButtonStyle())
                 }
-                .buttonStyle(ApeSecondaryButtonStyle())
+                .padding(ApeSpacing.md)
             }
-            .padding(ApeSpacing.md)
+            .scrollDismissesKeyboard(.interactively)
         }
         .background(ApeColor.background.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -54,6 +67,10 @@ struct ActiveWorkoutView: View {
                     .font(.apeHeadline)
                     .foregroundStyle(ApeColor.textPrimary)
                     .lineLimit(1)
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { isNumericFieldFocused = false }
             }
         }
         .sheet(isPresented: $isSelectingExercise) {
@@ -69,6 +86,16 @@ struct ActiveWorkoutView: View {
                 .presentationDetents([.height(230)])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(ApeColor.primarySoft)
+        }
+        .sheet(item: $editingTimeSet) { _ in
+            SetTimePickerView(
+                minutes: $timePickerMinutes,
+                seconds: $timePickerSeconds,
+                onDone: savePickedTime
+            )
+            .presentationDetents([.height(310)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(ApeColor.surface)
         }
         .confirmationDialog(
             "Abort this session?",
@@ -86,7 +113,7 @@ struct ActiveWorkoutView: View {
         .navigationDestination(isPresented: $isShowingFinishSummary) {
             WorkoutFinishView(
                 workoutName: workout.name,
-                exerciseNames: exercises.map(\.name)
+                improvements: currentImprovements()
             ) { shouldSave, rating in
                 finishSession(shouldSave: shouldSave, rating: rating)
             }
@@ -156,9 +183,7 @@ struct ActiveWorkoutView: View {
             HStack(spacing: ApeSpacing.xs) {
                 header("Set", width: 42)
                 header(performanceTitle(exercise.wrappedValue.repType))
-                if exercise.wrappedValue.difficultyType != .bodyweight {
-                    header(exercise.wrappedValue.difficultyType == .assistedWeight ? "Assisted" : "Weight")
-                }
+                header(exercise.wrappedValue.difficultyType == .assistedWeight ? "Assisted" : "Weight")
                 header("Done", width: 42)
             }
 
@@ -167,10 +192,19 @@ struct ActiveWorkoutView: View {
                     value("\(set.number)", width: 42)
                     if exercise.wrappedValue.repType == .reps {
                         editableInteger($set.reps, accessibilityLabel: "Reps for set \(set.number)")
+                    } else if exercise.wrappedValue.repType == .time {
+                        timeButton(
+                            set.timeText,
+                            exerciseID: exercise.wrappedValue.id,
+                            setID: set.id,
+                            accessibilityLabel: "Time for set \(set.number)"
+                        )
                     } else {
-                        value(performanceValue(set, repType: exercise.wrappedValue.repType))
+                        editableDecimal($set.distance, accessibilityLabel: "Distance for set \(set.number)")
                     }
-                    if exercise.wrappedValue.difficultyType != .bodyweight {
+                    if exercise.wrappedValue.difficultyType == .bodyweight {
+                        value("–")
+                    } else {
                         editableDecimal($set.weight, accessibilityLabel: "Weight for set \(set.number)")
                     }
                     Button {
@@ -239,7 +273,6 @@ struct ActiveWorkoutView: View {
                         )
                     }
                 ))
-                onSessionSaved()
             } catch {
                 return error.localizedDescription
             }
@@ -247,6 +280,28 @@ struct ActiveWorkoutView: View {
 
         closeFinishedSession()
         return nil
+    }
+
+    private func currentSessionExercises() -> [CompletedSessionExercise] {
+        exercises.map { exercise in
+            CompletedSessionExercise(
+                exerciseID: exercise.exerciseID,
+                sets: exercise.sets.map { set in
+                    CompletedSessionSet(
+                        number: set.number,
+                        reps: set.reps,
+                        timeSeconds: set.timeSeconds,
+                        distance: set.distance,
+                        weight: set.weight,
+                        completed: set.isCompleted
+                    )
+                }
+            )
+        }
+    }
+
+    private func currentImprovements() -> [ExerciseImprovementSummary] {
+        (try? repository.calculateImprovements(for: currentSessionExercises())) ?? []
     }
 
     private func closeFinishedSession() {
@@ -257,6 +312,7 @@ struct ActiveWorkoutView: View {
         // workout can be dismissed. Otherwise SwiftUI ignores the parent dismiss.
         DispatchQueue.main.async {
             dismiss()
+            onSessionSaved()
         }
     }
 
@@ -307,6 +363,7 @@ struct ActiveWorkoutView: View {
     private func editableInteger(_ value: Binding<Int>, accessibilityLabel: String) -> some View {
         TextField("0", value: value, format: .number)
             .keyboardType(.numberPad)
+            .focused($isNumericFieldFocused)
             .multilineTextAlignment(.center)
             .font(.apeBody)
             .foregroundStyle(ApeColor.textPrimary)
@@ -319,6 +376,7 @@ struct ActiveWorkoutView: View {
     private func editableDecimal(_ value: Binding<Decimal>, accessibilityLabel: String) -> some View {
         TextField("0", value: value, format: .number.precision(.fractionLength(0...2)))
             .keyboardType(.decimalPad)
+            .focused($isNumericFieldFocused)
             .multilineTextAlignment(.center)
             .font(.apeBody)
             .foregroundStyle(ApeColor.textPrimary)
@@ -328,14 +386,52 @@ struct ActiveWorkoutView: View {
             .accessibilityLabel(accessibilityLabel)
     }
 
+    private func timeButton(
+        _ value: String,
+        exerciseID: UUID,
+        setID: UUID,
+        accessibilityLabel: String
+    ) -> some View {
+        Button {
+            let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+            timePickerMinutes = parts.first.flatMap { Int($0) } ?? 0
+            timePickerSeconds = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
+            editingTimeSet = TimeSetTarget(exerciseID: exerciseID, setID: setID)
+        } label: {
+            Text(value)
+                .font(.apeBody.monospacedDigit())
+                .foregroundStyle(ApeColor.textPrimary)
+                .frame(maxWidth: .infinity, minHeight: 42)
+                .background(ApeColor.control)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint("Opens minutes and seconds picker")
+    }
+
+    private func savePickedTime() {
+        guard let target = editingTimeSet,
+              let exerciseIndex = exercises.firstIndex(where: { $0.id == target.exerciseID }),
+              let setIndex = exercises[exerciseIndex].sets.firstIndex(where: { $0.id == target.setID }) else {
+            editingTimeSet = nil
+            return
+        }
+        exercises[exerciseIndex].sets[setIndex].timeText = String(
+            format: "%d:%02d",
+            timePickerMinutes,
+            timePickerSeconds
+        )
+        editingTimeSet = nil
+    }
+
     private func performanceTitle(_ type: ExerciseRepType) -> String {
-        switch type { case .reps: "Reps"; case .time: "Time (s)"; case .distance: "Distance" }
+        switch type { case .reps: "Reps"; case .time: "Time"; case .distance: "Distance" }
     }
 
     private func performanceValue(_ set: ActiveWorkoutSet, repType: ExerciseRepType) -> String {
         switch repType {
         case .reps: "\(set.reps)"
-        case .time: set.timeSeconds.formatted(.number.precision(.fractionLength(0...2)))
+        case .time: formattedTime(set.timeSeconds)
         case .distance: decimalText(set.distance)
         }
     }
@@ -343,6 +439,12 @@ struct ActiveWorkoutView: View {
     private func decimalText(_ value: Decimal) -> String {
         NSDecimalNumber(decimal: value).doubleValue.formatted(.number.precision(.fractionLength(0...2)))
     }
+
+    private func formattedTime(_ seconds: Double) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+
 }
 
 private struct ActiveWorkoutExercise: Identifiable {
@@ -445,15 +547,26 @@ private struct ActiveWorkoutSet: Identifiable {
     let id = UUID()
     let number: Int
     var reps: Int
-    let timeSeconds: Double
-    let distance: Decimal
+    var timeText: String
+    var distance: Decimal
     var weight: Decimal
     var isCompleted = false
+
+    var timeSeconds: Double {
+        let components = timeText.split(separator: ":", omittingEmptySubsequences: false)
+        if components.count == 2,
+           let minutes = Int(components[0]),
+           let seconds = Int(components[1]) {
+            return Double(max(0, minutes * 60 + min(seconds, 59)))
+        }
+        return Double(max(0, Int(timeText) ?? 0))
+    }
 
     init(_ set: WorkoutPreviewSet) {
         number = set.number
         reps = set.reps
-        timeSeconds = set.timeSeconds
+        let totalSeconds = max(0, Int(set.timeSeconds.rounded()))
+        timeText = String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
         distance = set.distance
         weight = set.weight
     }
@@ -461,9 +574,58 @@ private struct ActiveWorkoutSet: Identifiable {
     init(number: Int) {
         self.number = number
         reps = 0
-        timeSeconds = 0
+        timeText = "0:00"
         distance = 0
         weight = 0
+    }
+}
+
+private struct TimeSetTarget: Identifiable {
+    var id: String { "\(exerciseID)-\(setID)" }
+    let exerciseID: UUID
+    let setID: UUID
+}
+
+private struct SetTimePickerView: View {
+    @Binding var minutes: Int
+    @Binding var seconds: Int
+    let onDone: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: ApeSpacing.sm) {
+            HStack {
+                Text("Set Time")
+                    .font(.apeTitle)
+                    .foregroundStyle(ApeColor.textPrimary)
+                Spacer()
+                Button("Done") {
+                    onDone()
+                    dismiss()
+                }
+                .font(.apeHeadline)
+            }
+
+            HStack(spacing: 0) {
+                Picker("Minutes", selection: $minutes) {
+                    ForEach(0...99, id: \.self) { value in
+                        Text("\(value) min").tag(value)
+                    }
+                }
+                .pickerStyle(.wheel)
+
+                Picker("Seconds", selection: $seconds) {
+                    ForEach(0...59, id: \.self) { value in
+                        Text("\(value) sec").tag(value)
+                    }
+                }
+                .pickerStyle(.wheel)
+            }
+            .frame(height: 190)
+        }
+        .padding(ApeSpacing.md)
+        .background(ApeColor.surface.ignoresSafeArea())
+        .preferredColorScheme(.dark)
     }
 }
 

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct WorkoutFinishView: View {
     let workoutName: String
-    let exerciseNames: [String]
+    let improvements: [ExerciseImprovementSummary]
     let onFinish: (_ shouldSave: Bool, _ rating: Int) -> String?
     @State private var rating = 3
     @State private var comparison: ImprovementComparison = .lifetime
@@ -115,39 +115,50 @@ struct WorkoutFinishView: View {
                 .accessibilityLabel("Improvement comparison: \(comparison.title)")
             }
 
-            ForEach(Array(exerciseNames.enumerated()), id: \.offset) { _, exerciseName in
-                exerciseImprovementCard(exerciseName)
+            ForEach(improvements) { improvement in
+                exerciseImprovementCard(improvement)
             }
         }
     }
 
-    private func exerciseImprovementCard(_ exerciseName: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(exerciseName)
+    private func exerciseImprovementCard(_ improvement: ExerciseImprovementSummary) -> some View {
+        let metrics = comparison == .lifetime ? improvement.lifetime : improvement.previous
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(improvement.exerciseName)
                 .font(.apeHeadline)
                 .foregroundStyle(ApeColor.textPrimary)
                 .padding(.bottom, ApeSpacing.xs)
 
-            metricRow("Max Reps")
-            Divider().overlay(ApeColor.divider.opacity(0.25))
-            metricRow("Max Weight")
-            Divider().overlay(ApeColor.divider.opacity(0.25))
-            metricRow("Volume Weight")
+            ForEach(Array(metrics.metrics.enumerated()), id: \.element.id) { index, metric in
+                metricRow(metric.title, metric: metric)
+                if index < metrics.metrics.count - 1 {
+                    Divider().overlay(ApeColor.divider.opacity(0.25))
+                }
+            }
         }
         .padding(ApeSpacing.md)
         .background(ApeColor.surface)
         .clipShape(RoundedRectangle(cornerRadius: ApeRadius.card))
     }
 
-    private func metricRow(_ title: String) -> some View {
+    private func metricRow(_ title: String, metric: ImprovementMetric) -> some View {
         HStack {
             Text(title)
             Spacer()
-            Text("–")
+            Text(metric.displayValue)
+                .foregroundStyle(metricColor(metric.trend))
         }
         .font(.apeBody)
         .foregroundStyle(ApeColor.textPrimary)
         .padding(.vertical, ApeSpacing.sm)
+    }
+
+    private func metricColor(_ trend: ImprovementTrend) -> Color {
+        switch trend {
+        case .improved: ApeColor.success
+        case .maintained, .firstEntry: ApeColor.textSecondary
+        case .regressed: ApeColor.destructive
+        }
     }
 
     private func finish(shouldSave: Bool) {

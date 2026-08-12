@@ -7,6 +7,7 @@ protocol WorkoutRepository {
     func fetchWorkoutPreview(id: NSManagedObjectID) throws -> WorkoutPreview
     func archiveWorkout(id: NSManagedObjectID) throws
     func saveCompletedSession(_ input: CompletedWorkoutSession) throws
+    func calculateImprovements(for exercises: [CompletedSessionExercise]) throws -> [ExerciseImprovementSummary]
     func fetchAvailableExercises() throws -> [ExerciseListItem]
     func fetchTags() throws -> [TagItem]
     @discardableResult func createTag(named name: String) throws -> TagItem
@@ -75,7 +76,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             exercises: templateExercises.compactMap { templateExercise in
                 guard let exercise = templateExercise.exercise else { return nil }
                 let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
-                let previousSets = latestCompletedSets(for: exercise)
+                let previousSets = latestSessionSets(for: exercise)
                 let plannedSets = (templateExercise.plannedSets?.array as? [TemplatePlannedSet] ?? [])
                     .sorted { $0.setNumber < $1.setNumber }
 
@@ -189,7 +190,187 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         }
     }
 
-    private func latestCompletedSets(for exercise: Exercise) -> [SessionSet] {
+    func calculateImprovements(for inputs: [CompletedSessionExercise]) throws -> [ExerciseImprovementSummary] {
+        try inputs.map { input in
+            guard let exercise = try context.existingObject(with: input.exerciseID) as? Exercise else {
+                throw WorkoutRepositoryError.exerciseNotFound
+            }
+            let currentSets = input.sets.filter(\.completed)
+            let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
+            let historicalOccurrences = (exercise.sessionExercises as? Set<SessionExercise> ?? [])
+                .filter { $0.session?.endedAt != nil }
+                .sorted { ($0.session?.endedAt ?? .distantPast) > ($1.session?.endedAt ?? .distantPast) }
+            let lifetimeSets = historicalOccurrences.flatMap(completedSets)
+            let previousSets = historicalOccurrences.first.map(completedSets) ?? []
+
+            return ExerciseImprovementSummary(
+                id: exercise.objectID,
+                exerciseName: exercise.name ?? "Untitled Exercise",
+                lifetime: improvementMetrics(
+                    current: currentSets,
+                    historical: lifetimeSets,
+                    configuration: configuration
+                ),
+                previous: improvementMetrics(
+                    current: currentSets,
+                    historical: previousSets,
+                    configuration: configuration
+                )
+            )
+        }
+    }
+
+    private func completedSets(from occurrence: SessionExercise) -> [CompletedSessionSet] {
+        (occurrence.sets?.array as? [SessionSet] ?? [])
+            .filter(\.completed)
+            .map {
+                CompletedSessionSet(
+                    number: Int($0.setNumber),
+                    reps: Int($0.reps),
+                    timeSeconds: $0.timeSeconds,
+                    distance: $0.distance as Decimal? ?? 0,
+                    weight: $0.weight as Decimal? ?? 0,
+                    completed: true
+                )
+            }
+    }
+
+    private func improvementMetrics(
+        current: [CompletedSessionSet],
+        historical: [CompletedSessionSet],
+        configuration: ExerciseConfiguration
+    ) -> ExerciseImprovementMetrics {
+        let usesAssistance = configuration.difficultyType == .assistedWeight
+        let primaryTitle: String
+        switch configuration.repType {
+        case .reps: primaryTitle = "Max Reps"
+        case .time: primaryTitle = "Max Time"
+        case .distance: primaryTitle = "Max Distance"
+        }
+
+        guard !current.isEmpty else {
+            return ExerciseImprovementMetrics(metrics: metricTitles(for: configuration).map {
+                ImprovementMetric(title: $0, displayValue: "–", trend: .firstEntry)
+            })
+        }
+
+        let currentResistance = usesAssistance
+            ? current.map(\.weight).min() ?? 0
+            : current.map(\.weight).max() ?? 0
+        let currentAtResistance = current.filter { $0.weight == currentResistance }
+        let historicalAtResistance = historical.filter { $0.weight == currentResistance }
+        let currentPerformance = maximumPerformance(in: currentAtResistance, repType: configuration.repType)
+        let historicalPerformance = maximumPerformance(in: historicalAtResistance, repType: configuration.repType)
+        guard let currentPerformance else {
+            return ExerciseImprovementMetrics(metrics: metricTitles(for: configuration).map {
+                ImprovementMetric(title: $0, displayValue: "–", trend: .firstEntry)
+            })
+        }
+        let historicalResistance = usesAssistance
+            ? historical.map(\.weight).min()
+            : historical.map(\.weight).max()
+
+        var metrics = [ImprovementMetric(
+            title: primaryTitle,
+            displayValue: performanceComparisonText(
+                current: currentPerformance,
+                historical: historicalPerformance,
+                resistance: configuration.difficultyType == .bodyweight ? nil : currentResistance,
+                repType: configuration.repType
+            ),
+            trend: trend(currentPerformance, comparedWith: historicalPerformance)
+        )]
+
+        if configuration.difficultyType != .bodyweight {
+            metrics.append(ImprovementMetric(
+                title: usesAssistance ? "Min Assistance" : "Max Weight",
+                displayValue: comparisonText(current: currentResistance, historical: historicalResistance),
+                trend: usesAssistance
+                    ? inverseTrend(currentResistance, comparedWith: historicalResistance)
+                    : trend(currentResistance, comparedWith: historicalResistance)
+            ))
+        }
+
+        if configuration.repType == .reps && configuration.difficultyType == .weighted {
+            let currentVolume = current.map { Decimal($0.reps) * $0.weight }.max() ?? 0
+            let historicalVolume = historical.map { Decimal($0.reps) * $0.weight }.max()
+            metrics.append(ImprovementMetric(
+                title: "Volume Weight",
+                displayValue: comparisonText(current: currentVolume, historical: historicalVolume),
+                trend: trend(currentVolume, comparedWith: historicalVolume)
+            ))
+        }
+
+        return ExerciseImprovementMetrics(metrics: metrics)
+    }
+
+    private func metricTitles(for configuration: ExerciseConfiguration) -> [String] {
+        let primary: String
+        switch configuration.repType {
+        case .reps: primary = "Max Reps"
+        case .time: primary = "Max Time"
+        case .distance: primary = "Max Distance"
+        }
+        guard configuration.difficultyType != .bodyweight else { return [primary] }
+        let resistance = configuration.difficultyType == .assistedWeight ? "Min Assistance" : "Max Weight"
+        guard configuration.repType == .reps,
+              configuration.difficultyType == .weighted else { return [primary, resistance] }
+        return [primary, resistance, "Volume Weight"]
+    }
+
+    private func maximumPerformance(
+        in sets: [CompletedSessionSet],
+        repType: ExerciseRepType
+    ) -> Decimal? {
+        switch repType {
+        case .reps: sets.map { Decimal($0.reps) }.max()
+        case .time: sets.map { Decimal($0.timeSeconds) }.max()
+        case .distance: sets.map(\.distance).max()
+        }
+    }
+
+    private func performanceComparisonText(
+        current: Decimal?,
+        historical: Decimal?,
+        resistance: Decimal?,
+        repType: ExerciseRepType
+    ) -> String {
+        guard let current else { return "–" }
+        let currentText = performanceText(current, repType: repType)
+        let comparison = historical.map { "\(performanceText($0, repType: repType)) → \(currentText)" } ?? currentText
+        return resistance.map { "\(comparison) @ \(decimalText($0))" } ?? comparison
+    }
+
+    private func performanceText(_ value: Decimal, repType: ExerciseRepType) -> String {
+        guard repType == .time else { return decimalText(value) }
+        let seconds = max(0, NSDecimalNumber(decimal: value).intValue)
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private func trend<T: Comparable>(_ current: T, comparedWith historical: T?) -> ImprovementTrend {
+        guard let historical else { return .firstEntry }
+        if current > historical { return .improved }
+        if current < historical { return .regressed }
+        return .maintained
+    }
+
+    private func inverseTrend<T: Comparable>(_ current: T, comparedWith historical: T?) -> ImprovementTrend {
+        guard let historical else { return .firstEntry }
+        if current < historical { return .improved }
+        if current > historical { return .regressed }
+        return .maintained
+    }
+
+    private func decimalText(_ value: Decimal) -> String {
+        NSDecimalNumber(decimal: value).doubleValue.formatted(.number.precision(.fractionLength(0...2)))
+    }
+
+    private func comparisonText(current: Decimal, historical: Decimal?) -> String {
+        guard let historical else { return decimalText(current) }
+        return "\(decimalText(historical)) → \(decimalText(current))"
+    }
+
+    private func latestSessionSets(for exercise: Exercise) -> [SessionSet] {
         let occurrences = (exercise.sessionExercises as? Set<SessionExercise> ?? [])
             .filter { $0.session?.endedAt != nil }
             .sorted {
@@ -197,7 +378,6 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             }
         guard let latest = occurrences.first else { return [] }
         return (latest.sets?.array as? [SessionSet] ?? [])
-            .filter(\.completed)
             .sorted { $0.setNumber < $1.setNumber }
     }
 
