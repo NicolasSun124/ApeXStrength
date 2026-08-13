@@ -61,7 +61,7 @@ struct CreateWorkoutView: View {
             .padding(ApeSpacing.md)
         }
         .background(ApeColor.background.ignoresSafeArea())
-        .navigationTitle("Workouts")
+        .navigationTitle(viewModel.isEditing ? "Edit Workout" : "Workouts")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(ApeColor.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)

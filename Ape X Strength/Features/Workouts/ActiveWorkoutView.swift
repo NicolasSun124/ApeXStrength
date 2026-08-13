@@ -39,6 +39,9 @@ struct ActiveWorkoutView: View {
         self.onSessionSaved = onSessionSaved
         _exercises = State(initialValue: workout.exercises.map(ActiveWorkoutExercise.init))
         _startedAt = State(initialValue: startedAt)
+        _restTimerEnd = State(initialValue: RestTimerCoordinator.restoredEndDate(
+            for: sessionID.uriRepresentation().absoluteString
+        ))
     }
 
     init(
@@ -57,6 +60,9 @@ struct ActiveWorkoutView: View {
             )
         })
         _startedAt = State(initialValue: draft.startedAt)
+        _restTimerEnd = State(initialValue: RestTimerCoordinator.restoredEndDate(
+            for: draft.id.uriRepresentation().absoluteString
+        ))
     }
 
     var body: some View {
@@ -285,7 +291,9 @@ struct ActiveWorkoutView: View {
             }
 
             ForEach(exercise.sets) { $set in
-                HStack(spacing: ApeSpacing.xs) {
+                ActiveSetSwipeToRemove {
+                    exercise.wrappedValue.removeSet(id: set.id)
+                } content: { HStack(spacing: ApeSpacing.xs) {
                     value("\(set.number)", width: 42)
                     if exercise.wrappedValue.repType == .reps {
                         editableInteger($set.reps, accessibilityLabel: "Reps for set \(set.number)")
@@ -319,6 +327,9 @@ struct ActiveWorkoutView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .accessibilityLabel(set.isCompleted ? "Mark set incomplete" : "Mark set complete")
+                } }
+                .accessibilityAction(named: "Remove set \(set.number)") {
+                    exercise.wrappedValue.removeSet(id: set.id)
                 }
             }
 
@@ -489,7 +500,11 @@ struct ActiveWorkoutView: View {
 
     private func clearRestTimerWhenFinished() async {
         guard let scheduledEnd = restTimerEnd else { return }
-        await restTimerCoordinator.start(until: scheduledEnd, workoutName: workout.name)
+        await restTimerCoordinator.start(
+            until: scheduledEnd,
+            workoutName: workout.name,
+            sessionIdentifier: sessionID.uriRepresentation().absoluteString
+        )
         let delay = max(0, scheduledEnd.timeIntervalSinceNow)
         do {
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -605,6 +620,49 @@ struct ActiveWorkoutView: View {
 
 }
 
+private struct ActiveSetSwipeToRemove<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: Content
+    @State private var offset: CGFloat = 0
+
+    init(action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.action = action
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button(role: .destructive, action: action) {
+                Image(systemName: "trash.fill").foregroundStyle(.white).frame(width: 62, height: 42)
+            }
+            .background(ApeColor.destructive)
+            .opacity(offset < 0 ? 1 : 0)
+            content
+                .offset(x: offset)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 12)
+                        .onChanged { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            offset = min(0, max(-140, value.translation.width))
+                        }
+                        .onEnded { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            if offset < -105 {
+                                withAnimation(.easeOut(duration: 0.18)) { offset = -400 }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: action)
+                            } else {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                    offset = offset < -32 ? -62 : 0
+                                }
+                            }
+                        }
+                )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private struct ActiveWorkoutExercise: Identifiable {
     let id = UUID()
     let exerciseID: NSManagedObjectID
@@ -675,6 +733,11 @@ private struct ActiveWorkoutExercise: Identifiable {
 
     mutating func addSet() {
         sets.append(ActiveWorkoutSet(number: sets.count + 1))
+    }
+
+    mutating func removeSet(id: UUID) {
+        sets.removeAll { $0.id == id }
+        for index in sets.indices { sets[index].number = index + 1 }
     }
 }
 
@@ -893,7 +956,7 @@ private struct RestTimerView: View {
 
 private struct ActiveWorkoutSet: Identifiable {
     let id = UUID()
-    let number: Int
+    var number: Int
     var reps: Int
     var timeText: String
     var distance: Decimal

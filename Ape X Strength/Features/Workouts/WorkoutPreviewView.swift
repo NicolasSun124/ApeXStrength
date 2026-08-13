@@ -12,6 +12,7 @@ struct WorkoutPreviewView: View {
     @State private var sessionStartErrorMessage: String?
     @State private var isReorderingExercises = false
     @State private var exerciseChoosingAlternates: WorkoutPreviewExercise?
+    @State private var isEditingWorkout = false
     private let repository: any WorkoutRepository
     private let onArchived: () -> Void
 
@@ -45,6 +46,8 @@ struct WorkoutPreviewView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                Button("Edit") { isEditingWorkout = true }
+                    .accessibilityLabel("Edit workout")
                 Menu {
                     Button("Delete Workout", systemImage: "trash", role: .destructive) {
                         isConfirmingArchive = true
@@ -81,6 +84,16 @@ struct WorkoutPreviewView: View {
                     repository: repository,
                     onSessionSaved: sessionDidClose
                 )
+            }
+        }
+        .navigationDestination(isPresented: $isEditingWorkout) {
+            if let workout = viewModel.workout {
+                CreateWorkoutView(
+                    viewModel: CreateWorkoutViewModel(repository: repository, editing: workout)
+                ) {
+                    viewModel.load()
+                    onArchived()
+                }
             }
         }
         .alert(
@@ -226,13 +239,7 @@ struct WorkoutPreviewView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     if !workout.tags.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: ApeSpacing.xs) {
-                                ForEach(workout.tags) { tag in
-                                    previewTag(tag)
-                                }
-                            }
-                        }
+                        PreviewTagOverflowRow(tags: workout.tags)
                         .accessibilityLabel("Workout tags")
                     }
                 }
@@ -324,16 +331,25 @@ struct WorkoutPreviewView: View {
                 }
 
                 ForEach(exercise.sets) { set in
-                    HStack(spacing: ApeSpacing.xs) {
-                        valueCell("\(set.number)", width: 42)
-                        valueCell(performanceValue(set, repType: exercise.repType))
-                        if exercise.difficultyType == .bodyweight {
-                            valueCell("—")
-                        } else {
-                            valueCell(decimalText(set.weight))
+                    SetSwipeToRemove {
+                        if viewModel.removeSet(number: set.number, from: exercise.id) {
+                            onArchived()
+                        }
+                    } content: {
+                        HStack(spacing: ApeSpacing.xs) {
+                            valueCell("\(set.number)", width: 42)
+                            valueCell(performanceValue(set, repType: exercise.repType))
+                            if exercise.difficultyType == .bodyweight {
+                                valueCell("—")
+                            } else {
+                                valueCell(decimalText(set.weight))
+                            }
                         }
                     }
                     .accessibilityElement(children: .combine)
+                    .accessibilityAction(named: "Remove set \(set.number)") {
+                        if viewModel.removeSet(number: set.number, from: exercise.id) { onArchived() }
+                    }
                 }
             }
         }
@@ -384,6 +400,95 @@ struct WorkoutPreviewView: View {
 
     private func decimalText(_ value: Decimal) -> String {
         NSDecimalNumber(decimal: value).doubleValue.formatted(.number.precision(.fractionLength(0...2)))
+    }
+}
+
+private struct PreviewTagOverflowRow: View {
+    let tags: [WorkoutTagSummary]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            tagRow(visibleCount: tags.count)
+            ForEach(Array(stride(from: tags.count - 1, through: 0, by: -1)), id: \.self) { count in
+                tagRow(visibleCount: count)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func tagRow(visibleCount: Int) -> some View {
+        HStack(spacing: ApeSpacing.xs) {
+            ForEach(Array(tags.prefix(visibleCount))) { tag in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color(red: tag.color.red, green: tag.color.green, blue: tag.color.blue))
+                        .frame(width: 12, height: 12)
+                    Text(tag.name)
+                        .font(.apeCallout)
+                        .foregroundStyle(ApeColor.textPrimary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, ApeSpacing.sm)
+                .frame(height: 30)
+                .background(ApeColor.control)
+                .clipShape(Capsule())
+            }
+            if visibleCount < tags.count {
+                Text("+\(tags.count - visibleCount) more")
+                    .font(.apeCallout)
+                    .foregroundStyle(ApeColor.textPrimary)
+                    .lineLimit(1)
+                    .padding(.horizontal, ApeSpacing.sm)
+                    .frame(height: 30)
+                    .background(ApeColor.textSecondary.opacity(0.55))
+                    .clipShape(Capsule())
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+private struct SetSwipeToRemove<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: Content
+    @State private var offset: CGFloat = 0
+
+    init(action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.action = action
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button(role: .destructive, action: action) {
+                Image(systemName: "trash.fill").foregroundStyle(.white).frame(width: 62, height: 38)
+            }
+            .background(ApeColor.destructive)
+            .opacity(offset < 0 ? 1 : 0)
+
+            content
+                .offset(x: offset)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 12)
+                        .onChanged { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            offset = min(0, max(-140, value.translation.width))
+                        }
+                        .onEnded { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            if offset < -105 {
+                                withAnimation(.easeOut(duration: 0.18)) { offset = -400 }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: action)
+                            } else {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                    offset = offset < -32 ? -62 : 0
+                                }
+                            }
+                        }
+                )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 

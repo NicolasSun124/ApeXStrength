@@ -150,6 +150,18 @@ final class WorkoutPreviewViewModel: ObservableObject {
             return false
         }
     }
+
+    func removeSet(number: Int, from exerciseID: NSManagedObjectID) -> Bool {
+        do {
+            try repository.removePlannedSet(number: number, fromExercise: exerciseID, inWorkout: workoutID)
+            editErrorMessage = nil
+            load()
+            return true
+        } catch {
+            editErrorMessage = error.localizedDescription
+            return false
+        }
+    }
 }
 
 @MainActor
@@ -164,8 +176,16 @@ final class CreateWorkoutViewModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSaving = false
     private let repository: any WorkoutRepository
+    private let editingWorkout: WorkoutPreview?
+    private var didInitializeEditingWorkout = false
 
-    init(repository: any WorkoutRepository) { self.repository = repository }
+    init(repository: any WorkoutRepository, editing workout: WorkoutPreview? = nil) {
+        self.repository = repository
+        editingWorkout = workout
+        name = workout?.name ?? ""
+    }
+
+    var isEditing: Bool { editingWorkout != nil }
 
     var isValid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !selectedExercises.isEmpty
@@ -175,6 +195,28 @@ final class CreateWorkoutViewModel: ObservableObject {
         do {
             exercises = try repository.fetchAvailableExercises()
             tags = try repository.fetchTags()
+            if let workout = editingWorkout, !didInitializeEditingWorkout {
+                selectedExercises = workout.exercises.compactMap { preview in
+                    exercises.first { $0.id == preview.id }
+                }
+                selectedTagIDs = Set(tags.filter { tag in
+                    workout.tags.contains { $0.name.caseInsensitiveCompare(tag.name) == .orderedSame }
+                }.map(\.id))
+                plannedSets = Dictionary(uniqueKeysWithValues: workout.exercises.map { exercise in
+                    (exercise.id, exercise.sets.map { set in
+                        WorkoutSetDraft(
+                            performanceValue: exercise.repType == .reps ? String(set.reps)
+                                : exercise.repType == .time ? String(set.timeSeconds)
+                                : NSDecimalNumber(decimal: set.distance).stringValue,
+                            weightValue: NSDecimalNumber(decimal: set.weight).stringValue
+                        )
+                    })
+                })
+                alternateExerciseIDs = Dictionary(uniqueKeysWithValues: workout.exercises.map {
+                    ($0.id, Set($0.alternates.map(\.id)))
+                })
+                didInitializeEditingWorkout = true
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -249,7 +291,7 @@ final class CreateWorkoutViewModel: ObservableObject {
         isSaving = true
         defer { isSaving = false }
         do {
-            try repository.createWorkout(NewWorkout(
+            let input = NewWorkout(
                 name: name,
                 exerciseIDs: selectedExercises.map(\.id),
                 selectedTagIDs: selectedTagIDs,
@@ -265,7 +307,12 @@ final class CreateWorkoutViewModel: ObservableObject {
                     return (exercise.id, sets)
                 }),
                 alternateExerciseIDsByExerciseID: alternateExerciseIDs
-            ))
+            )
+            if let editingWorkout {
+                try repository.updateWorkout(id: editingWorkout.id, input: input)
+            } else {
+                try repository.createWorkout(input)
+            }
             return true
         } catch {
             errorMessage = error.localizedDescription

@@ -14,6 +14,8 @@ struct RestTimerAttributes: ActivityAttributes {
 @MainActor
 final class RestTimerCoordinator: ObservableObject {
     private static let notificationIdentifier = "rest-timer-finished"
+    nonisolated private static let endDateKey = "restTimer.endDate"
+    nonisolated private static let sessionIdentifierKey = "restTimer.sessionIdentifier"
 
     private let notificationCenter: UNUserNotificationCenter
     private let settings: any SettingsService
@@ -27,8 +29,23 @@ final class RestTimerCoordinator: ObservableObject {
         self.settings = settings
     }
 
-    func start(until endDate: Date, workoutName: String) async {
+    nonisolated static func restoredEndDate(for sessionIdentifier: String) -> Date? {
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: sessionIdentifierKey) == sessionIdentifier,
+              let endDate = defaults.object(forKey: endDateKey) as? Date,
+              endDate > Date() else {
+            defaults.removeObject(forKey: endDateKey)
+            defaults.removeObject(forKey: sessionIdentifierKey)
+            return nil
+        }
+        return endDate
+    }
+
+    func start(until endDate: Date, workoutName: String, sessionIdentifier: String) async {
         guard endDate > Date() else { return }
+
+        UserDefaults.standard.set(endDate, forKey: Self.endDateKey)
+        UserDefaults.standard.set(sessionIdentifier, forKey: Self.sessionIdentifierKey)
 
         notificationCenter.removePendingNotificationRequests(withIdentifiers: [Self.notificationIdentifier])
 
@@ -72,12 +89,19 @@ final class RestTimerCoordinator: ObservableObject {
 
     func cancel() async {
         notificationCenter.removePendingNotificationRequests(withIdentifiers: [Self.notificationIdentifier])
+        clearPersistedTimer()
 
         await endActivity()
     }
 
     func finish() async {
+        clearPersistedTimer()
         await endActivity()
+    }
+
+    private func clearPersistedTimer() {
+        UserDefaults.standard.removeObject(forKey: Self.endDateKey)
+        UserDefaults.standard.removeObject(forKey: Self.sessionIdentifierKey)
     }
 
     private func endActivity() async {

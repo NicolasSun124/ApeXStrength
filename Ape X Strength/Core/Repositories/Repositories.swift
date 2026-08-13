@@ -14,6 +14,7 @@ protocol WorkoutRepository {
     func reorderExercises(_ exerciseIDs: [NSManagedObjectID], inWorkout id: NSManagedObjectID) throws
     func setAlternateExercises(_ alternateIDs: Set<NSManagedObjectID>, forExercise id: NSManagedObjectID, inWorkout workoutID: NSManagedObjectID) throws
     func replaceExercise(_ id: NSManagedObjectID, with alternateID: NSManagedObjectID, inWorkout workoutID: NSManagedObjectID) throws
+    func removePlannedSet(number: Int, fromExercise id: NSManagedObjectID, inWorkout workoutID: NSManagedObjectID) throws
     func startSession(
         workoutID: NSManagedObjectID,
         startedAt: Date,
@@ -27,6 +28,7 @@ protocol WorkoutRepository {
     func fetchTags() throws -> [TagItem]
     @discardableResult func createTag(named name: String) throws -> TagItem
     @discardableResult func createWorkout(_ input: NewWorkout) throws -> WorkoutListItem
+    func updateWorkout(id: NSManagedObjectID, input: NewWorkout) throws
 }
 
 @MainActor
@@ -123,6 +125,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                         let setNumber = plannedSet.setNumber > 0 ? Int(plannedSet.setNumber) : index + 1
                         let previous = previousSets.first { Int($0.setNumber) == setNumber }
                         return WorkoutPreviewSet(
+                            id: plannedSet.objectID,
                             number: setNumber,
                             reps: previous.map { Int($0.reps) } ?? 0,
                             timeSeconds: previous?.timeSeconds ?? 0,
@@ -168,6 +171,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 targetRestSeconds: Int(exercise.targetRestSeconds),
                 sets: sets.map { set in
                     WorkoutPreviewSet(
+                        id: set.objectID,
                         number: Int(set.setNumber),
                         reps: Int(set.reps),
                         timeSeconds: set.timeSeconds,
@@ -338,6 +342,33 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         alternates.insert(current)
         item.exercise = replacement
         item.alternateExercises = alternates as NSSet
+        item.syncState = "pendingUpdate"
+        workout.updatedAt = Date()
+        workout.syncState = "pendingUpdate"
+        try saveWorkoutChanges()
+    }
+
+    func removePlannedSet(
+        number: Int,
+        fromExercise exerciseID: NSManagedObjectID,
+        inWorkout workoutID: NSManagedObjectID
+    ) throws {
+        let workout = try editableWorkout(id: workoutID)
+        guard let item = orderedTemplateExercises(in: workout)
+            .first(where: { $0.exercise?.objectID == exerciseID }) else {
+            throw WorkoutRepositoryError.exerciseNotFound
+        }
+        var sets = (item.plannedSets?.array as? [TemplatePlannedSet] ?? [])
+            .sorted { $0.setNumber < $1.setNumber }
+        guard let index = sets.firstIndex(where: { Int($0.setNumber) == number }) else {
+            throw WorkoutRepositoryError.exerciseNotFound
+        }
+        context.delete(sets.remove(at: index))
+        for (index, set) in sets.enumerated() {
+            set.setNumber = Int32(index + 1)
+            set.syncState = "pendingUpdate"
+        }
+        item.plannedSets = NSOrderedSet(array: sets)
         item.syncState = "pendingUpdate"
         workout.updatedAt = Date()
         workout.syncState = "pendingUpdate"
@@ -876,6 +907,56 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             },
             statistics: .empty
         )
+    }
+
+    func updateWorkout(id: NSManagedObjectID, input: NewWorkout) throws {
+        let name = input.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw WorkoutRepositoryError.nameRequired }
+        guard !input.exerciseIDs.isEmpty else { throw WorkoutRepositoryError.exerciseRequired }
+        let workout = try editableWorkout(id: id)
+
+        let oldExercises = workout.templateExercises?.array as? [TemplateExercise] ?? []
+        oldExercises.forEach(context.delete)
+
+        let templateExercises = try input.exerciseIDs.enumerated().map { position, exerciseID in
+            guard let exercise = try context.existingObject(with: exerciseID) as? Exercise else {
+                throw WorkoutRepositoryError.exerciseNotFound
+            }
+            let item = TemplateExercise(context: context)
+            item.clientUUID = UUID()
+            item.position = Int32(position)
+            item.syncState = "pendingCreate"
+            item.exercise = exercise
+            item.workoutTemplate = workout
+
+            let alternateIDs = input.alternateExerciseIDsByExerciseID[exerciseID] ?? []
+            item.alternateExercises = Set(try alternateIDs.compactMap {
+                try context.existingObject(with: $0) as? Exercise
+            }) as NSSet
+
+            let sets = (input.plannedSetsByExerciseID[exerciseID] ?? []).enumerated().map { index, planned in
+                let set = TemplatePlannedSet(context: context)
+                set.clientUUID = UUID()
+                set.setNumber = Int32(index + 1)
+                set.syncState = "pendingCreate"
+                set.plannedReps = planned.reps.map(Int32.init) ?? 0
+                set.plannedTimeSeconds = planned.timeSeconds ?? 0
+                set.plannedDistance = planned.distance as NSDecimalNumber?
+                set.plannedWeight = planned.weight as NSDecimalNumber?
+                set.templateExercise = item
+                return set
+            }
+            item.plannedSets = NSOrderedSet(array: sets)
+            return item
+        }
+
+        workout.name = name
+        workout.templateExercises = NSOrderedSet(array: templateExercises)
+        let tags = try input.selectedTagIDs.compactMap { try context.existingObject(with: $0) as? Tag }
+        workout.tags = Set(tags) as NSSet
+        workout.updatedAt = Date()
+        workout.syncState = "pendingUpdate"
+        try saveWorkoutChanges()
     }
 
     private func workoutStatistics(from sessions: [WorkoutSession]) -> WorkoutStatistics {

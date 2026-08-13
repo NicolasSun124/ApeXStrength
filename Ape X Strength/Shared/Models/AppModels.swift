@@ -107,7 +107,7 @@ struct WorkoutPreviewExercise: Identifiable, Equatable {
 }
 
 struct WorkoutPreviewSet: Identifiable, Equatable {
-    var id: Int { number }
+    let id: NSManagedObjectID
     let number: Int
     let reps: Int
     let timeSeconds: Double
@@ -225,6 +225,11 @@ struct WorkoutSetDraft: Identifiable, Equatable {
     let id = UUID()
     var performanceValue = ""
     var weightValue = ""
+
+    init(performanceValue: String = "", weightValue: String = "") {
+        self.performanceValue = performanceValue
+        self.weightValue = weightValue
+    }
 }
 
 struct ExerciseListItem: Identifiable, Equatable {
