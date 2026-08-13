@@ -1,18 +1,24 @@
 import CoreData
 import SwiftUI
+import UIKit
 
 struct ActiveWorkoutView: View {
     let workout: WorkoutPreview
+    let sessionID: NSManagedObjectID
     private let repository: any WorkoutRepository
     private let onSessionSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var exercises: [ActiveWorkoutExercise]
     @State private var availableExercises: [ExerciseListItem] = []
     @State private var isSelectingExercise = false
-    @State private var startedAt = Date()
+    @State private var isReorderingExercises = false
+    @State private var exerciseChoosingAlternates: ActiveWorkoutExercise?
+    @State private var startedAt: Date
     @State private var restTimerEnd: Date?
     @State private var isRestTimerPresented = false
     @State private var isConfirmingAbort = false
+    @State private var abortErrorMessage: String?
+    @State private var autosaveErrorMessage: String?
     @State private var isShowingFinishSummary = false
     @State private var editingTimeSet: TimeSetTarget?
     @State private var timePickerMinutes = 0
@@ -21,14 +27,35 @@ struct ActiveWorkoutView: View {
 
     init(
         workout: WorkoutPreview,
+        sessionID: NSManagedObjectID,
+        startedAt: Date,
         repository: any WorkoutRepository,
         onSessionSaved: @escaping () -> Void = {}
     ) {
         self.workout = workout
+        self.sessionID = sessionID
         self.repository = repository
         self.onSessionSaved = onSessionSaved
         _exercises = State(initialValue: workout.exercises.map(ActiveWorkoutExercise.init))
-        _startedAt = State(initialValue: Date())
+        _startedAt = State(initialValue: startedAt)
+    }
+
+    init(
+        draft: WorkoutSessionDraft,
+        repository: any WorkoutRepository,
+        onSessionSaved: @escaping () -> Void = {}
+    ) {
+        workout = draft.workout
+        sessionID = draft.id
+        self.repository = repository
+        self.onSessionSaved = onSessionSaved
+        _exercises = State(initialValue: draft.workout.exercises.map { exercise in
+            ActiveWorkoutExercise(
+                exercise,
+                completedSetNumbers: draft.completedSetNumbersByExerciseID[exercise.id] ?? []
+            )
+        })
+        _startedAt = State(initialValue: draft.startedAt)
     }
 
     var body: some View {
@@ -81,6 +108,20 @@ struct ActiveWorkoutView: View {
                 onSelect: addExercise
             )
         }
+        .sheet(isPresented: $isReorderingExercises) {
+            ActiveExerciseReorderView(exercises: exercises) { exercises = $0 }
+        }
+        .sheet(item: $exerciseChoosingAlternates) { exercise in
+            ActiveAlternateExercisePicker(
+                exercises: availableExercises.filter { candidate in
+                    candidate.id != exercise.exerciseID
+                        && !exercises.contains(where: { $0.exerciseID == candidate.id })
+                },
+                selection: Set(exercise.alternates.map(\.id))
+            ) { selection in
+                setAlternates(selection, for: exercise.id)
+            }
+        }
         .sheet(isPresented: $isRestTimerPresented) {
             RestTimerView(endDate: $restTimerEnd)
                 .presentationDetents([.height(230)])
@@ -103,12 +144,33 @@ struct ActiveWorkoutView: View {
             titleVisibility: .visible
         ) {
             Button("Abort Session", role: .destructive) {
-                restTimerEnd = nil
-                dismiss()
+                abortSession()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Your active session and all of its progress will be deleted without being saved.")
+        }
+        .alert(
+            "Couldn’t Abort Session",
+            isPresented: Binding(
+                get: { abortErrorMessage != nil },
+                set: { if !$0 { abortErrorMessage = nil } }
+            )
+        ) {
+            Button("OK") { abortErrorMessage = nil }
+        } message: {
+            Text(abortErrorMessage ?? "Please try again.")
+        }
+        .alert(
+            "Couldn’t Autosave Session",
+            isPresented: Binding(
+                get: { autosaveErrorMessage != nil },
+                set: { if !$0 { autosaveErrorMessage = nil } }
+            )
+        ) {
+            Button("OK") { autosaveErrorMessage = nil }
+        } message: {
+            Text(autosaveErrorMessage ?? "Your latest changes haven’t been saved yet.")
         }
         .navigationDestination(isPresented: $isShowingFinishSummary) {
             WorkoutFinishView(
@@ -119,6 +181,7 @@ struct ActiveWorkoutView: View {
             }
         }
         .task { loadAvailableExercises() }
+        .task(id: currentSessionExercises()) { await autosaveSession() }
         .task(id: restTimerEnd) { await clearRestTimerWhenFinished() }
     }
 
@@ -178,6 +241,39 @@ struct ActiveWorkoutView: View {
                 Text(exercise.wrappedValue.name)
                     .font(.apeHeadline)
                     .foregroundStyle(ApeColor.textPrimary)
+                Spacer()
+                if !exercise.wrappedValue.alternates.isEmpty {
+                    Menu {
+                        ForEach(exercise.wrappedValue.alternates) { alternate in
+                            Button {
+                                replaceExercise(exercise.wrappedValue.id, with: alternate)
+                            } label: {
+                                Label(alternate.name, systemImage: "arrow.triangle.2.circlepath")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(ApeColor.textPrimary)
+                            .padding()
+                    }
+                    .accessibilityLabel("Show alternates for \(exercise.wrappedValue.name)")
+                }
+                Menu {
+                    Button("Alternate Exercises", systemImage: "arrow.triangle.2.circlepath") {
+                        exerciseChoosingAlternates = exercise.wrappedValue
+                    }
+                    Button("Reorder", systemImage: "arrow.up.arrow.down") {
+                        isReorderingExercises = true
+                    }
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        removeExercise(exercise.wrappedValue.id)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .foregroundStyle(ApeColor.textPrimary)
+                        .padding()
+                }
+                .accessibilityLabel("Options for \(exercise.wrappedValue.name)")
             }
 
             HStack(spacing: ApeSpacing.xs) {
@@ -249,10 +345,35 @@ struct ActiveWorkoutView: View {
         exercises.append(ActiveWorkoutExercise(exercise: exercise))
     }
 
+    private func removeExercise(_ id: UUID) {
+        exercises.removeAll { $0.id == id }
+    }
+
+    private func setAlternates(_ ids: Set<NSManagedObjectID>, for id: UUID) {
+        guard let index = exercises.firstIndex(where: { $0.id == id }) else { return }
+        exercises[index].alternates = availableExercises
+            .filter { ids.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func replaceExercise(_ id: UUID, with alternate: ExerciseListItem) {
+        guard let index = exercises.firstIndex(where: { $0.id == id }),
+              !exercises.contains(where: { $0.id != id && $0.exerciseID == alternate.id }) else { return }
+        let current = exercises[index]
+        var alternates = current.alternates.filter { $0.id != alternate.id }
+        alternates.append(current.listItem)
+        exercises[index] = ActiveWorkoutExercise(
+            exercise: alternate,
+            sets: current.sets,
+            alternates: alternates.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        )
+    }
+
     private func finishSession(shouldSave: Bool, rating: Int) -> String? {
-        if shouldSave {
-            do {
+        do {
+            if shouldSave {
                 try repository.saveCompletedSession(CompletedWorkoutSession(
+                    id: sessionID,
                     workoutID: workout.id,
                     startedAt: startedAt,
                     endedAt: Date(),
@@ -273,13 +394,27 @@ struct ActiveWorkoutView: View {
                         )
                     }
                 ))
-            } catch {
-                return error.localizedDescription
+            } else {
+                try repository.discardSession(id: sessionID)
             }
+        } catch {
+            return error.localizedDescription
         }
 
         closeFinishedSession()
         return nil
+    }
+
+    private func abortSession() {
+        do {
+            try repository.discardSession(id: sessionID)
+            restTimerEnd = nil
+            dismiss()
+        } catch {
+            // Keep the active workout open so the persisted session is not
+            // silently left behind after a failed delete.
+            abortErrorMessage = error.localizedDescription
+        }
     }
 
     private func currentSessionExercises() -> [CompletedSessionExercise] {
@@ -297,6 +432,19 @@ struct ActiveWorkoutView: View {
                     )
                 }
             )
+        }
+    }
+
+    private func autosaveSession() async {
+        do {
+            try await Task.sleep(for: .milliseconds(500))
+            try Task.checkCancellation()
+            try repository.updateActiveSession(id: sessionID, exercises: currentSessionExercises())
+            autosaveErrorMessage = nil
+        } catch is CancellationError {
+            // A newer edit replaced this pending save.
+        } catch {
+            autosaveErrorMessage = error.localizedDescription
         }
     }
 
@@ -456,6 +604,7 @@ private struct ActiveWorkoutExercise: Identifiable {
     let difficultyType: ExerciseDifficultyType
     let targetRestSeconds: Int
     var sets: [ActiveWorkoutSet]
+    var alternates: [ExerciseListItem]
 
     init(_ exercise: WorkoutPreviewExercise) {
         exerciseID = exercise.id
@@ -465,6 +614,20 @@ private struct ActiveWorkoutExercise: Identifiable {
         difficultyType = exercise.difficultyType
         targetRestSeconds = exercise.targetRestSeconds
         sets = exercise.sets.map(ActiveWorkoutSet.init)
+        alternates = exercise.alternates
+    }
+
+    init(_ exercise: WorkoutPreviewExercise, completedSetNumbers: Set<Int>) {
+        exerciseID = exercise.id
+        name = exercise.name
+        primaryMuscleColorHex = exercise.primaryMuscleColorHex
+        repType = exercise.repType
+        difficultyType = exercise.difficultyType
+        targetRestSeconds = exercise.targetRestSeconds
+        sets = exercise.sets.map {
+            ActiveWorkoutSet($0, isCompleted: completedSetNumbers.contains($0.number))
+        }
+        alternates = exercise.alternates
     }
 
     init(exercise: ExerciseListItem) {
@@ -475,10 +638,185 @@ private struct ActiveWorkoutExercise: Identifiable {
         difficultyType = exercise.difficultyType
         targetRestSeconds = exercise.targetRestSeconds
         sets = []
+        alternates = []
+    }
+
+    init(exercise: ExerciseListItem, sets: [ActiveWorkoutSet], alternates: [ExerciseListItem]) {
+        exerciseID = exercise.id
+        name = exercise.name
+        primaryMuscleColorHex = exercise.primaryMuscleColorHex
+        repType = exercise.repType
+        difficultyType = exercise.difficultyType
+        targetRestSeconds = exercise.targetRestSeconds
+        self.sets = sets
+        self.alternates = alternates
+    }
+
+    var listItem: ExerciseListItem {
+        ExerciseListItem(
+            id: exerciseID,
+            name: name,
+            primaryMuscleColorHex: primaryMuscleColorHex,
+            repType: repType,
+            difficultyType: difficultyType,
+            targetRestSeconds: targetRestSeconds
+        )
     }
 
     mutating func addSet() {
         sets.append(ActiveWorkoutSet(number: sets.count + 1))
+    }
+}
+
+private struct ActiveAlternateExercisePicker: View {
+    let exercises: [ExerciseListItem]
+    let onDone: (Set<NSManagedObjectID>) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var pending: Set<NSManagedObjectID>
+    @State private var searchText = ""
+
+    init(
+        exercises: [ExerciseListItem],
+        selection: Set<NSManagedObjectID>,
+        onDone: @escaping (Set<NSManagedObjectID>) -> Void
+    ) {
+        self.exercises = exercises
+        self.onDone = onDone
+        _pending = State(initialValue: selection)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(filteredExercises) { exercise in
+                Button {
+                    if pending.contains(exercise.id) {
+                        pending.remove(exercise.id)
+                    } else {
+                        pending.insert(exercise.id)
+                    }
+                } label: {
+                    HStack(spacing: ApeSpacing.md) {
+                        Circle()
+                            .fill(Color(hex: exercise.primaryMuscleColorHex))
+                            .frame(width: 18, height: 18)
+                        Text(exercise.name).foregroundStyle(ApeColor.textPrimary)
+                        Spacer()
+                        if pending.contains(exercise.id) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(ApeColor.primary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(ApeColor.surface)
+            }
+            .scrollContentBackground(.hidden)
+            .background(ApeColor.background)
+            .searchable(text: $searchText, prompt: "Search exercises")
+            .navigationTitle("Alternate Exercises")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { onDone(pending); dismiss() }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var filteredExercises: [ExerciseListItem] {
+        searchText.isEmpty ? exercises : exercises.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+}
+
+private struct ActiveExerciseReorderView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var exercises: [ActiveWorkoutExercise]
+    let onFinish: ([ActiveWorkoutExercise]) -> Void
+
+    init(exercises: [ActiveWorkoutExercise], onFinish: @escaping ([ActiveWorkoutExercise]) -> Void) {
+        _exercises = State(initialValue: exercises)
+        self.onFinish = onFinish
+    }
+
+    var body: some View {
+        NavigationStack {
+            ActiveExerciseReorderTable(exercises: $exercises)
+                .background(ApeColor.background)
+                .navigationTitle("Reorder Exercises")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Finish") { onFinish(exercises); dismiss() }
+                    }
+                }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct ActiveExerciseReorderTable: UIViewControllerRepresentable {
+    @Binding var exercises: [ActiveWorkoutExercise]
+
+    func makeCoordinator() -> Coordinator { Coordinator(exercises: $exercises) }
+
+    func makeUIViewController(context: Context) -> UITableViewController {
+        let controller = UITableViewController(style: .insetGrouped)
+        controller.tableView.dataSource = context.coordinator
+        controller.tableView.delegate = context.coordinator
+        controller.tableView.backgroundColor = UIColor(ApeColor.background)
+        controller.tableView.separatorColor = UIColor(ApeColor.control)
+        controller.tableView.allowsSelection = false
+        controller.tableView.setEditing(true, animated: false)
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UITableViewController, context: Context) {
+        context.coordinator.exercises = $exercises
+        let ids = exercises.map(\.id)
+        guard ids != context.coordinator.displayedIDs else { return }
+        context.coordinator.displayedIDs = ids
+        controller.tableView.reloadData()
+    }
+
+    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate {
+        var exercises: Binding<[ActiveWorkoutExercise]>
+        var displayedIDs: [UUID]
+
+        init(exercises: Binding<[ActiveWorkoutExercise]>) {
+            self.exercises = exercises
+            displayedIDs = exercises.wrappedValue.map(\.id)
+        }
+
+        func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+            exercises.wrappedValue.count
+        }
+
+        func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+            let identifier = "ActiveExerciseReorderCell"
+            let cell = tableView.dequeueReusableCell(withIdentifier: identifier)
+                ?? UITableViewCell(style: .default, reuseIdentifier: identifier)
+            let exercise = exercises.wrappedValue[indexPath.row]
+            var content = cell.defaultContentConfiguration()
+            content.image = UIImage(systemName: "circle.fill")
+            content.imageProperties.tintColor = UIColor(Color(hex: exercise.primaryMuscleColorHex))
+            content.text = exercise.name
+            content.textProperties.color = UIColor(ApeColor.textPrimary)
+            content.textProperties.font = UIFont.preferredFont(forTextStyle: .headline)
+            cell.contentConfiguration = content
+            cell.backgroundColor = UIColor(ApeColor.surface)
+            cell.showsReorderControl = true
+            return cell
+        }
+
+        func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool { true }
+
+        func tableView(_ tableView: UITableView, moveRowAt source: IndexPath, to destination: IndexPath) {
+            var reordered = exercises.wrappedValue
+            reordered.insert(reordered.remove(at: source.row), at: destination.row)
+            displayedIDs = reordered.map(\.id)
+            exercises.wrappedValue = reordered
+        }
     }
 }
 
@@ -569,6 +907,17 @@ private struct ActiveWorkoutSet: Identifiable {
         timeText = String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
         distance = set.distance
         weight = set.weight
+    }
+
+
+    init(_ set: WorkoutPreviewSet, isCompleted: Bool) {
+        number = set.number
+        reps = set.reps
+        let totalSeconds = max(0, Int(set.timeSeconds.rounded()))
+        timeText = String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+        distance = set.distance
+        weight = set.weight
+        self.isCompleted = isCompleted
     }
 
     init(number: Int) {

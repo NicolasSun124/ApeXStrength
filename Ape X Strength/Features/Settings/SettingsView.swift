@@ -17,7 +17,7 @@ struct SettingsView: View {
                             ApeFormField("Weight unit") {
                                 Picker("Weight unit", selection: $viewModel.settings.weightUnit) {
                                     Text("Kilograms").tag("kg")
-                                    Text("Pounds").tag("lb")
+                                    Text("Pounds").tag("lbs")
                                 }
                                 .pickerStyle(.segmented)
                             }

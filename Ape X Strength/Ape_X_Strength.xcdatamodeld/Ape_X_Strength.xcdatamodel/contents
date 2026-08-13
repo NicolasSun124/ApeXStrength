@@ -5,7 +5,7 @@
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="email" attributeType="String"/>
         <attribute name="emailVerified" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
-        <attribute name="preferredWeightUnit" attributeType="String" defaultValueString="kg"/>
+        <attribute name="preferredWeightUnit" attributeType="String" defaultValueString="lbs"/>
         <attribute name="serverID" attributeType="UUID" usesScalarValueType="NO"/>
         <relationship name="customExercises" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Exercise" inverseName="owner" inverseEntity="Exercise"/>
         <relationship name="sessions" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="WorkoutSession" inverseName="user" inverseEntity="WorkoutSession"/>
@@ -32,6 +32,7 @@
         <relationship name="secondaryMuscles" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Muscle" inverseName="secondaryExercises" inverseEntity="Muscle"/>
         <relationship name="sessionExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="SessionExercise" inverseName="exercise" inverseEntity="SessionExercise"/>
         <relationship name="templateExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="TemplateExercise" inverseName="exercise" inverseEntity="TemplateExercise"/>
+        <relationship name="alternateForTemplateExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="TemplateExercise" inverseName="alternateExercises" inverseEntity="TemplateExercise"/>
     </entity>
     <entity name="Tag" representedClassName="Tag" syncable="YES" codeGenerationType="class">
         <attribute name="clientUUID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
@@ -58,6 +59,7 @@
         <attribute name="position" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="serverID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="syncState" attributeType="String" defaultValueString="pendingCreate"/>
+        <relationship name="alternateExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Exercise" inverseName="alternateForTemplateExercises" inverseEntity="Exercise"/>
         <relationship name="exercise" maxCount="1" deletionRule="Nullify" destinationEntity="Exercise" inverseName="templateExercises" inverseEntity="Exercise"/>
         <relationship name="plannedSets" optional="YES" toMany="YES" deletionRule="Cascade" ordered="YES" destinationEntity="TemplatePlannedSet" inverseName="templateExercise" inverseEntity="TemplatePlannedSet"/>
         <relationship name="workoutTemplate" maxCount="1" deletionRule="Nullify" destinationEntity="WorkoutTemplate" inverseName="templateExercises" inverseEntity="WorkoutTemplate"/>

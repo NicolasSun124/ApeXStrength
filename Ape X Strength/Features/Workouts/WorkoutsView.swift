@@ -3,6 +3,8 @@ import SwiftUI
 struct WorkoutsView: View {
     @StateObject private var viewModel: WorkoutsViewModel
     @State private var isCreatingWorkout = false
+    @State private var isShowingDraftPrompt = false
+    @State private var isResumingSession = false
     private let repository: any WorkoutRepository
 
     init(viewModel: @autoclosure @escaping () -> WorkoutsViewModel, repository: any WorkoutRepository) {
@@ -44,8 +46,46 @@ struct WorkoutsView: View {
                     viewModel.didCreateWorkout()
                 }
             }
+            .navigationDestination(isPresented: $isResumingSession) {
+                if let draft = viewModel.activeSessionDraft {
+                    ActiveWorkoutView(
+                        draft: draft,
+                        repository: repository,
+                        onSessionSaved: {
+                            isResumingSession = false
+                            viewModel.clearActiveSessionDraft()
+                            viewModel.load()
+                        }
+                    )
+                }
+            }
         }
-        .task { if viewModel.state == .idle { viewModel.load() } }
+        .confirmationDialog(
+            "Resume active session?",
+            isPresented: $isShowingDraftPrompt,
+            titleVisibility: .visible
+        ) {
+            Button("Resume") { isResumingSession = true }
+            Button("Discard", role: .destructive) { viewModel.discardActiveSessionDraft() }
+        } message: {
+            Text("An unfinished \(viewModel.activeSessionDraft?.workout.name ?? "workout") session was found.")
+        }
+        .alert(
+            "Couldn’t Load Session",
+            isPresented: Binding(
+                get: { viewModel.draftErrorMessage != nil },
+                set: { if !$0 { viewModel.dismissDraftError() } }
+            )
+        ) {
+            Button("OK") { viewModel.dismissDraftError() }
+        } message: {
+            Text(viewModel.draftErrorMessage ?? "Please try again.")
+        }
+        .task {
+            if viewModel.state == .idle { viewModel.load() }
+            viewModel.detectActiveSessionDraft()
+            isShowingDraftPrompt = viewModel.activeSessionDraft != nil
+        }
     }
 
     private var workoutList: some View {
@@ -173,7 +213,12 @@ private struct WorkoutCollectionCard: View {
         VStack(spacing: 0) {
             statisticRow("Last Used", value: workout.statistics.lastUsed?.formatted(date: .abbreviated, time: .shortened) ?? "–")
             statisticRow("Mean Duration", value: formatted(workout.statistics.meanDurationMinutes, suffix: " min"))
-            statisticRow("Mean Volume", value: workout.statistics.meanVolume.map { "\($0) kg" } ?? "–")
+            statisticRow("Mean Volume", value: workout.statistics.meanVolume.map {
+                let value = NSDecimalNumber(decimal: $0).doubleValue.formatted(
+                    .number.precision(.fractionLength(0...2))
+                )
+                return "\(value) \(WeightUnit(setting: UserDefaultsSettingsService().load().weightUnit).rawValue)"
+            } ?? "–")
             statisticRow("Mean Completed", value: formatted(workout.statistics.meanPercentCompleted, suffix: "%"), showsDivider: false)
         }
     }

@@ -24,6 +24,25 @@ struct PersistenceController {
     }
 
     @MainActor
+    func initializeTemporaryUser() throws -> User {
+        let context = container.viewContext
+        let request = User.fetchRequest()
+        request.fetchLimit = 1
+        if let user = try context.fetch(request).first {
+            return user
+        }
+
+        let user = User(context: context)
+        user.serverID = UUID()
+        user.createdAt = Date()
+        user.email = "local@apexstrength.app"
+        user.emailVerified = false
+        user.preferredWeightUnit = "lbs"
+        try context.save()
+        return user
+    }
+
+    @MainActor
     static let preview: PersistenceController = {
         let persistence = PersistenceController(inMemory: true)
         let context = persistence.container.viewContext
@@ -32,7 +51,7 @@ struct PersistenceController {
         user.serverID = UUID()
         user.email = "preview@apexstrength.app"
         user.createdAt = Date()
-        user.preferredWeightUnit = "kg"
+        user.preferredWeightUnit = "lbs"
 
         let muscle = Muscle(context: context)
         muscle.serverID = UUID()

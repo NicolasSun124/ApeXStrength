@@ -18,8 +18,9 @@ final class UserDefaultsSettingsService: SettingsService {
     }
 
     func load() -> AppSettings {
-        AppSettings(
-            weightUnit: defaults.string(forKey: Key.weightUnit) ?? "kg",
+        let storedUnit = defaults.string(forKey: Key.weightUnit)
+        return AppSettings(
+            weightUnit: WeightUnit(setting: storedUnit ?? "lbs").rawValue,
             restTimerNotificationsEnabled: defaults.object(forKey: Key.restNotifications) as? Bool ?? true
         )
     }

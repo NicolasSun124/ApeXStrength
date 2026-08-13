@@ -6,6 +6,8 @@ import SwiftUI
 final class WorkoutsViewModel: ObservableObject {
     @Published private(set) var state: ViewLoadState = .idle
     @Published private(set) var workouts: [WorkoutListItem] = []
+    @Published private(set) var activeSessionDraft: WorkoutSessionDraft?
+    @Published private(set) var draftErrorMessage: String?
     private let repository: any WorkoutRepository
 
     init(repository: any WorkoutRepository) {
@@ -23,13 +25,43 @@ final class WorkoutsViewModel: ObservableObject {
     }
 
     func didCreateWorkout() { load() }
+
+    func detectActiveSessionDraft() {
+        do {
+            activeSessionDraft = try repository.fetchActiveSessionDraft()
+            draftErrorMessage = nil
+        } catch {
+            draftErrorMessage = error.localizedDescription
+        }
+    }
+
+    func discardActiveSessionDraft() {
+        guard let draft = activeSessionDraft else { return }
+        do {
+            try repository.discardSession(id: draft.id)
+            activeSessionDraft = nil
+            draftErrorMessage = nil
+        } catch {
+            draftErrorMessage = error.localizedDescription
+        }
+    }
+
+    func clearActiveSessionDraft() {
+        activeSessionDraft = nil
+    }
+
+    func dismissDraftError() {
+        draftErrorMessage = nil
+    }
 }
 
 @MainActor
 final class WorkoutPreviewViewModel: ObservableObject {
     @Published private(set) var state: ViewLoadState = .idle
     @Published private(set) var workout: WorkoutPreview?
+    @Published private(set) var availableExercises: [ExerciseListItem] = []
     @Published private(set) var archiveErrorMessage: String?
+    @Published private(set) var editErrorMessage: String?
     @Published private(set) var isArchiving = false
     private let workoutID: NSManagedObjectID
     private let repository: any WorkoutRepository
@@ -43,6 +75,7 @@ final class WorkoutPreviewViewModel: ObservableObject {
         state = .loading
         do {
             workout = try repository.fetchWorkoutPreview(id: workoutID)
+            availableExercises = try repository.fetchAvailableExercises()
             state = .loaded
         } catch {
             state = .failed(error.localizedDescription)
@@ -65,6 +98,58 @@ final class WorkoutPreviewViewModel: ObservableObject {
     func dismissArchiveError() {
         archiveErrorMessage = nil
     }
+
+    func removeExercise(id: NSManagedObjectID) -> Bool {
+        do {
+            try repository.removeExercise(id: id, fromWorkout: workoutID)
+            editErrorMessage = nil
+            load()
+            return true
+        } catch {
+            editErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func reorderExercises(_ exerciseIDs: [NSManagedObjectID]) -> Bool {
+        do {
+            try repository.reorderExercises(exerciseIDs, inWorkout: workoutID)
+            editErrorMessage = nil
+            load()
+            return true
+        } catch {
+            editErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func dismissEditError() {
+        editErrorMessage = nil
+    }
+
+    func setAlternateExercises(_ ids: Set<NSManagedObjectID>, for exerciseID: NSManagedObjectID) -> Bool {
+        do {
+            try repository.setAlternateExercises(ids, forExercise: exerciseID, inWorkout: workoutID)
+            editErrorMessage = nil
+            load()
+            return true
+        } catch {
+            editErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func replaceExercise(_ exerciseID: NSManagedObjectID, with alternateID: NSManagedObjectID) -> Bool {
+        do {
+            try repository.replaceExercise(exerciseID, with: alternateID, inWorkout: workoutID)
+            editErrorMessage = nil
+            load()
+            return true
+        } catch {
+            editErrorMessage = error.localizedDescription
+            return false
+        }
+    }
 }
 
 @MainActor
@@ -73,6 +158,7 @@ final class CreateWorkoutViewModel: ObservableObject {
     @Published var selectedExercises: [ExerciseListItem] = []
     @Published var selectedTagIDs: Set<NSManagedObjectID> = []
     @Published var plannedSets: [NSManagedObjectID: [WorkoutSetDraft]] = [:]
+    @Published var alternateExerciseIDs: [NSManagedObjectID: Set<NSManagedObjectID>] = [:]
     @Published private(set) var exercises: [ExerciseListItem] = []
     @Published private(set) var tags: [TagItem] = []
     @Published private(set) var errorMessage: String?
@@ -101,11 +187,27 @@ final class CreateWorkoutViewModel: ObservableObject {
         let ids = offsets.map { selectedExercises[$0].id }
         selectedExercises.remove(atOffsets: offsets)
         ids.forEach { plannedSets.removeValue(forKey: $0) }
+        ids.forEach { alternateExerciseIDs.removeValue(forKey: $0) }
     }
     func moveExercises(from source: IndexSet, to destination: Int) { selectedExercises.move(fromOffsets: source, toOffset: destination) }
 
     func reorderExercises(_ exercises: [ExerciseListItem]) {
         selectedExercises = exercises
+    }
+
+    func replaceExercise(_ current: ExerciseListItem, with alternate: ExerciseListItem) {
+        guard let index = selectedExercises.firstIndex(where: { $0.id == current.id }),
+              !selectedExercises.contains(where: { $0.id == alternate.id }) else { return }
+
+        var alternates = alternateExerciseIDs.removeValue(forKey: current.id) ?? []
+        alternates.remove(alternate.id)
+        alternates.insert(current.id)
+        alternateExerciseIDs[alternate.id] = alternates
+
+        if let sets = plannedSets.removeValue(forKey: current.id) {
+            plannedSets[alternate.id] = sets
+        }
+        selectedExercises[index] = alternate
     }
 
     func addSet(to exerciseID: NSManagedObjectID) {
@@ -161,7 +263,8 @@ final class CreateWorkoutViewModel: ObservableObject {
                         )
                     }
                     return (exercise.id, sets)
-                })
+                }),
+                alternateExerciseIDsByExerciseID: alternateExerciseIDs
             ))
             return true
         } catch {

@@ -5,7 +5,19 @@ import Foundation
 protocol WorkoutRepository {
     func fetchWorkouts() throws -> [WorkoutListItem]
     func fetchWorkoutPreview(id: NSManagedObjectID) throws -> WorkoutPreview
+    func fetchActiveSessionDraft() throws -> WorkoutSessionDraft?
     func archiveWorkout(id: NSManagedObjectID) throws
+    func removeExercise(id: NSManagedObjectID, fromWorkout id: NSManagedObjectID) throws
+    func reorderExercises(_ exerciseIDs: [NSManagedObjectID], inWorkout id: NSManagedObjectID) throws
+    func setAlternateExercises(_ alternateIDs: Set<NSManagedObjectID>, forExercise id: NSManagedObjectID, inWorkout workoutID: NSManagedObjectID) throws
+    func replaceExercise(_ id: NSManagedObjectID, with alternateID: NSManagedObjectID, inWorkout workoutID: NSManagedObjectID) throws
+    func startSession(
+        workoutID: NSManagedObjectID,
+        startedAt: Date,
+        exercises: [CompletedSessionExercise]
+    ) throws -> NSManagedObjectID
+    func updateActiveSession(id: NSManagedObjectID, exercises: [CompletedSessionExercise]) throws
+    func discardSession(id: NSManagedObjectID) throws
     func saveCompletedSession(_ input: CompletedWorkoutSession) throws
     func calculateImprovements(for exercises: [CompletedSessionExercise]) throws -> [ExerciseImprovementSummary]
     func fetchAvailableExercises() throws -> [ExerciseListItem]
@@ -25,10 +37,16 @@ protocol ExerciseRepository {
 @MainActor
 final class CoreDataWorkoutRepository: WorkoutRepository {
     private let context: NSManagedObjectContext
+    private let settings: any SettingsService
+    private let user: User
 
-    init(context: NSManagedObjectContext) {
+    init(context: NSManagedObjectContext, settings: any SettingsService, user: User) {
         self.context = context
+        self.settings = settings
+        self.user = user
     }
+
+    private var selectedWeightUnit: WeightUnit { WeightUnit(setting: settings.load().weightUnit) }
 
     func fetchWorkouts() throws -> [WorkoutListItem] {
         let request = WorkoutTemplate.fetchRequest()
@@ -95,11 +113,70 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                             reps: previous.map { Int($0.reps) } ?? 0,
                             timeSeconds: previous?.timeSeconds ?? 0,
                             distance: previous?.distance as Decimal? ?? 0,
-                            weight: previous?.weight as Decimal? ?? 0
+                            weight: selectedWeightUnit.displayed(fromPounds: previous?.weight as Decimal? ?? 0)
                         )
-                    }
+                    },
+                    alternates: (templateExercise.alternateExercises as? Set<Exercise> ?? [])
+                        .map(exerciseListItem)
+                        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                 )
             }
+        )
+    }
+
+    func fetchActiveSessionDraft() throws -> WorkoutSessionDraft? {
+        let request = WorkoutSession.fetchRequest()
+        request.fetchLimit = 1
+        request.sortDescriptors = [NSSortDescriptor(key: "startedAt", ascending: false)]
+        request.predicate = NSPredicate(format: "endedAt == nil AND user == %@ AND workoutTemplate != nil", user)
+        guard let session = try context.fetch(request).first,
+              let workout = session.workoutTemplate else { return nil }
+
+        let templateItems = orderedTemplateExercises(in: workout)
+        let occurrences = (session.sessionExercises?.array as? [SessionExercise] ?? [])
+            .sorted { $0.position < $1.position }
+        var completedSets: [NSManagedObjectID: Set<Int>] = [:]
+
+        let exercises = occurrences.compactMap { occurrence -> WorkoutPreviewExercise? in
+            guard let exercise = occurrence.exercise else { return nil }
+            let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
+            let sets = (occurrence.sets?.array as? [SessionSet] ?? [])
+                .sorted { $0.setNumber < $1.setNumber }
+            completedSets[exercise.objectID] = Set(sets.filter(\.completed).map { Int($0.setNumber) })
+            let templateItem = templateItems.first { $0.exercise == exercise }
+
+            return WorkoutPreviewExercise(
+                id: exercise.objectID,
+                name: exercise.name ?? "Untitled Exercise",
+                primaryMuscleColorHex: exercise.primaryMuscle?.colorHex ?? "8AC5FF",
+                repType: configuration.repType,
+                difficultyType: configuration.difficultyType,
+                targetRestSeconds: Int(exercise.targetRestSeconds),
+                sets: sets.map { set in
+                    WorkoutPreviewSet(
+                        number: Int(set.setNumber),
+                        reps: Int(set.reps),
+                        timeSeconds: set.timeSeconds,
+                        distance: set.distance as Decimal? ?? 0,
+                        weight: selectedWeightUnit.displayed(fromPounds: set.weight as Decimal? ?? 0)
+                    )
+                },
+                alternates: (templateItem?.alternateExercises as? Set<Exercise> ?? [])
+                    .map(exerciseListItem)
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            )
+        }
+
+        return WorkoutSessionDraft(
+            id: session.objectID,
+            workout: WorkoutPreview(
+                id: workout.objectID,
+                name: workout.name ?? "Untitled Workout",
+                tags: [],
+                exercises: exercises
+            ),
+            startedAt: session.startedAt ?? Date(),
+            completedSetNumbersByExerciseID: completedSets
         )
     }
 
@@ -121,8 +198,123 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         }
     }
 
-    func saveCompletedSession(_ input: CompletedWorkoutSession) throws {
-        guard let workout = try context.existingObject(with: input.workoutID) as? WorkoutTemplate,
+    func removeExercise(id exerciseID: NSManagedObjectID, fromWorkout workoutID: NSManagedObjectID) throws {
+        let workout = try editableWorkout(id: workoutID)
+        var items = orderedTemplateExercises(in: workout)
+        guard let index = items.firstIndex(where: { $0.exercise?.objectID == exerciseID }) else {
+            throw WorkoutRepositoryError.exerciseNotFound
+        }
+        let removed = items.remove(at: index)
+        context.delete(removed)
+        apply(items, to: workout)
+        try saveWorkoutChanges()
+    }
+
+    func reorderExercises(_ exerciseIDs: [NSManagedObjectID], inWorkout workoutID: NSManagedObjectID) throws {
+        let workout = try editableWorkout(id: workoutID)
+        let existing = orderedTemplateExercises(in: workout)
+        let byExerciseID = Dictionary(uniqueKeysWithValues: existing.compactMap { item in
+            item.exercise.map { ($0.objectID, item) }
+        })
+        guard exerciseIDs.count == existing.count,
+              Set(exerciseIDs) == Set(byExerciseID.keys) else {
+            throw WorkoutRepositoryError.exerciseNotFound
+        }
+        apply(exerciseIDs.compactMap { byExerciseID[$0] }, to: workout)
+        try saveWorkoutChanges()
+    }
+
+    func setAlternateExercises(
+        _ alternateIDs: Set<NSManagedObjectID>,
+        forExercise exerciseID: NSManagedObjectID,
+        inWorkout workoutID: NSManagedObjectID
+    ) throws {
+        let workout = try editableWorkout(id: workoutID)
+        guard let item = orderedTemplateExercises(in: workout).first(where: { $0.exercise?.objectID == exerciseID }) else {
+            throw WorkoutRepositoryError.exerciseNotFound
+        }
+        let alternates = try alternateIDs.compactMap { try context.existingObject(with: $0) as? Exercise }
+        item.alternateExercises = Set(alternates) as NSSet
+        item.syncState = "pendingUpdate"
+        workout.updatedAt = Date()
+        workout.syncState = "pendingUpdate"
+        try saveWorkoutChanges()
+    }
+
+    func replaceExercise(
+        _ exerciseID: NSManagedObjectID,
+        with alternateID: NSManagedObjectID,
+        inWorkout workoutID: NSManagedObjectID
+    ) throws {
+        let workout = try editableWorkout(id: workoutID)
+        let items = orderedTemplateExercises(in: workout)
+        guard let item = items.first(where: { $0.exercise?.objectID == exerciseID }),
+              let current = item.exercise,
+              let replacement = try context.existingObject(with: alternateID) as? Exercise,
+              !items.contains(where: { $0 !== item && $0.exercise?.objectID == alternateID }) else {
+            throw WorkoutRepositoryError.exerciseNotFound
+        }
+        var alternates = item.alternateExercises as? Set<Exercise> ?? []
+        alternates.remove(replacement)
+        alternates.insert(current)
+        item.exercise = replacement
+        item.alternateExercises = alternates as NSSet
+        item.syncState = "pendingUpdate"
+        workout.updatedAt = Date()
+        workout.syncState = "pendingUpdate"
+        try saveWorkoutChanges()
+    }
+
+    private func exerciseListItem(_ exercise: Exercise) -> ExerciseListItem {
+        let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
+        return ExerciseListItem(
+            id: exercise.objectID,
+            name: exercise.name ?? "Untitled Exercise",
+            primaryMuscleColorHex: exercise.primaryMuscle?.colorHex ?? "8AC5FF",
+            repType: configuration.repType,
+            difficultyType: configuration.difficultyType,
+            targetRestSeconds: Int(exercise.targetRestSeconds)
+        )
+    }
+
+    private func editableWorkout(id: NSManagedObjectID) throws -> WorkoutTemplate {
+        guard let workout = try context.existingObject(with: id) as? WorkoutTemplate,
+              !workout.isDeleted,
+              !workout.isArchived else {
+            throw WorkoutRepositoryError.workoutNotFound
+        }
+        return workout
+    }
+
+    private func orderedTemplateExercises(in workout: WorkoutTemplate) -> [TemplateExercise] {
+        (workout.templateExercises?.array as? [TemplateExercise] ?? []).sorted { $0.position < $1.position }
+    }
+
+    private func apply(_ exercises: [TemplateExercise], to workout: WorkoutTemplate) {
+        for (position, exercise) in exercises.enumerated() {
+            exercise.position = Int32(position)
+            exercise.syncState = "pendingUpdate"
+        }
+        workout.templateExercises = NSOrderedSet(array: exercises)
+        workout.updatedAt = Date()
+        workout.syncState = "pendingUpdate"
+    }
+
+    private func saveWorkoutChanges() throws {
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    func startSession(
+        workoutID: NSManagedObjectID,
+        startedAt: Date,
+        exercises: [CompletedSessionExercise]
+    ) throws -> NSManagedObjectID {
+        guard let workout = try context.existingObject(with: workoutID) as? WorkoutTemplate,
               !workout.isDeleted,
               !workout.isArchived else {
             throw WorkoutRepositoryError.workoutNotFound
@@ -130,6 +322,63 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
 
         let session = WorkoutSession(context: context)
         session.clientUUID = UUID()
+        session.startedAt = startedAt
+        session.syncState = "pendingCreate"
+        session.workoutTemplate = workout
+        session.user = workout.user
+
+        do {
+            try replaceContents(of: session, with: exercises, completedAt: startedAt)
+            try context.save()
+            return session.objectID
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    func discardSession(id: NSManagedObjectID) throws {
+        guard let session = try context.existingObject(with: id) as? WorkoutSession,
+              !session.isDeleted else { return }
+        context.delete(session)
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    func updateActiveSession(id: NSManagedObjectID, exercises: [CompletedSessionExercise]) throws {
+        guard let session = try context.existingObject(with: id) as? WorkoutSession,
+              !session.isDeleted,
+              session.endedAt == nil else {
+            throw WorkoutRepositoryError.sessionNotFound
+        }
+
+        do {
+            try replaceContents(of: session, with: exercises, completedAt: Date())
+            session.durationSeconds = Int64(max(0, Date().timeIntervalSince(session.startedAt ?? Date())))
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    func saveCompletedSession(_ input: CompletedWorkoutSession) throws {
+        guard let workout = try context.existingObject(with: input.workoutID) as? WorkoutTemplate,
+              !workout.isDeleted,
+              !workout.isArchived else {
+            throw WorkoutRepositoryError.workoutNotFound
+        }
+
+        guard let session = try context.existingObject(with: input.id) as? WorkoutSession,
+              !session.isDeleted,
+              session.workoutTemplate == workout,
+              session.endedAt == nil else {
+            throw WorkoutRepositoryError.sessionNotFound
+        }
         session.startedAt = input.startedAt
         session.endedAt = input.endedAt
         session.durationSeconds = Int64(max(0, input.endedAt.timeIntervalSince(input.startedAt)))
@@ -138,10 +387,30 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         session.workoutTemplate = workout
         session.user = workout.user
 
+        try replaceContents(of: session, with: input.exercises, completedAt: input.endedAt)
+
+        workout.updatedAt = input.endedAt
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    private func replaceContents(
+        of session: WorkoutSession,
+        with inputs: [CompletedSessionExercise],
+        completedAt: Date
+    ) throws {
+        let existingExercises = session.sessionExercises?.array as? [SessionExercise] ?? []
+        session.sessionExercises = NSOrderedSet()
+        existingExercises.forEach(context.delete)
+
         var completedSetCount = 0
         var totalSetCount = 0
         var totalVolume = Decimal.zero
-        let sessionExercises = try input.exercises.enumerated().map { position, inputExercise in
+        let sessionExercises = try inputs.enumerated().map { position, inputExercise in
             guard let exercise = try context.existingObject(with: inputExercise.exerciseID) as? Exercise else {
                 throw WorkoutRepositoryError.exerciseNotFound
             }
@@ -159,16 +428,17 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 set.reps = Int32(inputSet.reps)
                 set.timeSeconds = inputSet.timeSeconds
                 set.distance = NSDecimalNumber(decimal: inputSet.distance)
-                set.weight = NSDecimalNumber(decimal: inputSet.weight)
+                let weightInPounds = selectedWeightUnit.pounds(fromDisplayed: inputSet.weight)
+                set.weight = NSDecimalNumber(decimal: weightInPounds)
                 set.completed = inputSet.completed
-                set.completedAt = inputSet.completed ? input.endedAt : nil
+                set.completedAt = inputSet.completed ? completedAt : nil
                 set.isWarmup = false
                 set.syncState = "pendingCreate"
                 set.sessionExercise = sessionExercise
                 totalSetCount += 1
                 if inputSet.completed {
                     completedSetCount += 1
-                    totalVolume += Decimal(inputSet.reps) * inputSet.weight
+                    totalVolume += Decimal(inputSet.reps) * weightInPounds
                 }
                 return set
             }
@@ -180,14 +450,6 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         session.percentCompleted = totalSetCount == 0
             ? 0
             : Double(completedSetCount) / Double(totalSetCount) * 100
-
-        workout.updatedAt = input.endedAt
-        do {
-            try context.save()
-        } catch {
-            context.rollback()
-            throw error
-        }
     }
 
     func calculateImprovements(for inputs: [CompletedSessionExercise]) throws -> [ExerciseImprovementSummary] {
@@ -195,7 +457,16 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             guard let exercise = try context.existingObject(with: input.exerciseID) as? Exercise else {
                 throw WorkoutRepositoryError.exerciseNotFound
             }
-            let currentSets = input.sets.filter(\.completed)
+            let currentSets = input.sets.filter(\.completed).map { set in
+                CompletedSessionSet(
+                    number: set.number,
+                    reps: set.reps,
+                    timeSeconds: set.timeSeconds,
+                    distance: set.distance,
+                    weight: selectedWeightUnit.pounds(fromDisplayed: set.weight),
+                    completed: set.completed
+                )
+            }
             let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
             let historicalOccurrences = (exercise.sessionExercises as? Set<SessionExercise> ?? [])
                 .filter { $0.session?.endedAt != nil }
@@ -338,7 +609,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         guard let current else { return "–" }
         let currentText = performanceText(current, repType: repType)
         let comparison = historical.map { "\(performanceText($0, repType: repType)) → \(currentText)" } ?? currentText
-        return resistance.map { "\(comparison) @ \(decimalText($0))" } ?? comparison
+        return resistance.map { "\(comparison) @ \(weightText($0))" } ?? comparison
     }
 
     private func performanceText(_ value: Decimal, repType: ExerciseRepType) -> String {
@@ -365,9 +636,13 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         NSDecimalNumber(decimal: value).doubleValue.formatted(.number.precision(.fractionLength(0...2)))
     }
 
+    private func weightText(_ pounds: Decimal) -> String {
+        "\(decimalText(selectedWeightUnit.displayed(fromPounds: pounds))) \(selectedWeightUnit.rawValue)"
+    }
+
     private func comparisonText(current: Decimal, historical: Decimal?) -> String {
-        guard let historical else { return decimalText(current) }
-        return "\(decimalText(historical)) → \(decimalText(current))"
+        guard let historical else { return weightText(current) }
+        return "\(weightText(historical)) → \(weightText(current))"
     }
 
     private func latestSessionSets(for exercise: Exercise) -> [SessionSet] {
@@ -464,7 +739,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         workout.updatedAt = Date()
         workout.name = name
         workout.syncState = "pendingCreate"
-        workout.user = try fetchOrCreateLocalUser()
+        workout.user = user
 
         let exercises = try input.exerciseIDs.enumerated().map { position, id in
             guard let exercise = try context.existingObject(with: id) as? Exercise else {
@@ -476,6 +751,11 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             item.syncState = "pendingCreate"
             item.exercise = exercise
             item.workoutTemplate = workout
+            let alternateIDs = input.alternateExerciseIDsByExerciseID[id] ?? []
+            let alternates = try alternateIDs.compactMap { alternateID in
+                try context.existingObject(with: alternateID) as? Exercise
+            }
+            item.alternateExercises = Set(alternates) as NSSet
 
             let plannedSets = (input.plannedSetsByExerciseID[id] ?? []).enumerated().map { setIndex, input in
                 let set = TemplatePlannedSet(context: context)
@@ -485,7 +765,9 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 set.plannedReps = input.reps.map(Int32.init) ?? 0
                 set.plannedTimeSeconds = input.timeSeconds ?? 0
                 set.plannedDistance = input.distance as NSDecimalNumber?
-                set.plannedWeight = input.weight as NSDecimalNumber?
+                set.plannedWeight = input.weight.map {
+                    NSDecimalNumber(decimal: selectedWeightUnit.pounds(fromDisplayed: $0))
+                }
                 set.templateExercise = item
                 return set
             }
@@ -516,20 +798,6 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         )
     }
 
-    private func fetchOrCreateLocalUser() throws -> User {
-        let request = User.fetchRequest()
-        request.fetchLimit = 1
-        if let user = try context.fetch(request).first { return user }
-
-        let user = User(context: context)
-        user.serverID = UUID()
-        user.createdAt = Date()
-        user.email = "local@apexstrength.app"
-        user.emailVerified = false
-        user.preferredWeightUnit = "kg"
-        return user
-    }
-
     private func workoutStatistics(from sessions: [WorkoutSession]) -> WorkoutStatistics {
         guard !sessions.isEmpty else { return .empty }
 
@@ -542,7 +810,9 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         return WorkoutStatistics(
             lastUsed: sessions.compactMap(\.endedAt).max(),
             meanDurationMinutes: mean(durations),
-            meanVolume: mean(volumes).map { Decimal($0) },
+            meanVolume: mean(volumes).map {
+                selectedWeightUnit.displayed(fromPounds: Decimal($0))
+            },
             meanRestSeconds: mean(sessions.compactMap { $0.averageRestSeconds > 0 ? $0.averageRestSeconds : nil }),
             meanIntensity: mean(sessions.compactMap { $0.estimatedIntensity > 0 ? $0.estimatedIntensity : nil }),
             meanPercentCompleted: mean(sessions.compactMap { $0.percentCompleted > 0 ? $0.percentCompleted : nil })
@@ -576,7 +846,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
 }
 
 enum WorkoutRepositoryError: LocalizedError {
-    case nameRequired, exerciseRequired, exerciseNotFound, tagNameRequired, workoutNotFound
+    case nameRequired, exerciseRequired, exerciseNotFound, tagNameRequired, workoutNotFound, sessionNotFound
 
     var errorDescription: String? {
         switch self {
@@ -585,6 +855,7 @@ enum WorkoutRepositoryError: LocalizedError {
         case .exerciseNotFound: "One of the selected exercises is no longer available."
         case .tagNameRequired: "Enter a tag name."
         case .workoutNotFound: "This workout is no longer available."
+        case .sessionNotFound: "This workout session is no longer available."
         }
     }
 }
@@ -592,9 +863,11 @@ enum WorkoutRepositoryError: LocalizedError {
 @MainActor
 final class CoreDataExerciseRepository: ExerciseRepository {
     private let context: NSManagedObjectContext
+    private let user: User
 
-    init(context: NSManagedObjectContext) {
+    init(context: NSManagedObjectContext, user: User) {
         self.context = context
+        self.user = user
     }
 
     func fetchExercises() throws -> [ExerciseListItem] {
@@ -687,6 +960,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
         ).storageValue
         exercise.targetRestSeconds = Int32(input.targetRestSeconds)
         exercise.primaryMuscle = primary
+        exercise.owner = user
         exercise.syncState = "pendingCreate"
         exercise.secondaryMuscles = Set(try input.secondaryMuscleIDs.compactMap {
             try context.existingObject(with: $0) as? Muscle

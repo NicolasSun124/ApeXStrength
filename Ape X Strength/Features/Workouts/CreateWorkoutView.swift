@@ -8,6 +8,7 @@ struct CreateWorkoutView: View {
     @State private var isSelectingExercises = false
     @State private var isSelectingTags = false
     @State private var isReorderingExercises = false
+    @State private var exerciseChoosingAlternates: ExerciseListItem?
     @FocusState private var isNameFocused: Bool
     let onSaved: () -> Void
 
@@ -90,6 +91,18 @@ struct CreateWorkoutView: View {
                 viewModel.reorderExercises($0)
             }
         }
+        .sheet(item: $exerciseChoosingAlternates) { exercise in
+            AlternateExercisePickerView(
+                exercises: viewModel.exercises.filter { candidate in
+                    candidate.id != exercise.id
+                        && !viewModel.selectedExercises.contains(where: { $0.id == candidate.id })
+                },
+                selection: Binding(
+                    get: { viewModel.alternateExerciseIDs[exercise.id] ?? [] },
+                    set: { viewModel.alternateExerciseIDs[exercise.id] = $0 }
+                )
+            )
+        }
         .task { viewModel.load() }
     }
 
@@ -110,7 +123,30 @@ struct CreateWorkoutView: View {
                     Text(exercise.name).font(.apeHeadline).foregroundStyle(ApeColor.textPrimary)
                 }
                 Spacer()
+                if !(viewModel.alternateExerciseIDs[exercise.id] ?? []).isEmpty {
+                    Menu {
+                        ForEach(alternateExercises(for: exercise)) { alternate in
+                            Button {
+                                viewModel.replaceExercise(exercise, with: alternate)
+                            } label: {
+                                Label {
+                                    Text(alternate.name)
+                                } icon: {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(ApeColor.textPrimary)
+                            .padding()
+                    }
+                    .accessibilityLabel("Show alternates for \(exercise.name)")
+                }
                 Menu {
+                    Button("Alternate Exercises", systemImage: "arrow.triangle.2.circlepath") {
+                        exerciseChoosingAlternates = exercise
+                    }
                     Button("Reorder", systemImage: "arrow.up.arrow.down") {
                         isReorderingExercises = true
                     }
@@ -202,6 +238,75 @@ struct CreateWorkoutView: View {
 
     private func weightPlaceholder(for difficultyType: ExerciseDifficultyType) -> String {
         difficultyType == .assistedWeight ? "Assisted" : "Weight"
+    }
+
+    private func alternateExercises(for exercise: ExerciseListItem) -> [ExerciseListItem] {
+        let ids = viewModel.alternateExerciseIDs[exercise.id] ?? []
+        return viewModel.exercises.filter { ids.contains($0.id) }
+    }
+}
+
+private struct AlternateExercisePickerView: View {
+    let exercises: [ExerciseListItem]
+    @Binding var selection: Set<NSManagedObjectID>
+    @Environment(\.dismiss) private var dismiss
+    @State private var pending: Set<NSManagedObjectID>
+    @State private var searchText = ""
+
+    init(exercises: [ExerciseListItem], selection: Binding<Set<NSManagedObjectID>>) {
+        self.exercises = exercises
+        _selection = selection
+        _pending = State(initialValue: selection.wrappedValue)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(filteredExercises) { exercise in
+                Button {
+                    if pending.contains(exercise.id) {
+                        pending.remove(exercise.id)
+                    } else {
+                        pending.insert(exercise.id)
+                    }
+                } label: {
+                    HStack(spacing: ApeSpacing.md) {
+                        Circle()
+                            .fill(Color(hex: exercise.primaryMuscleColorHex))
+                            .frame(width: 18, height: 18)
+                        Text(exercise.name)
+                            .font(.apeHeadline)
+                            .foregroundStyle(ApeColor.textPrimary)
+                        Spacer()
+                        if pending.contains(exercise.id) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(ApeColor.primary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(ApeColor.surface)
+            }
+            .scrollContentBackground(.hidden)
+            .background(ApeColor.background)
+            .searchable(text: $searchText, prompt: "Search exercises")
+            .navigationTitle("Alternate Exercises")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        selection = pending
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var filteredExercises: [ExerciseListItem] {
+        searchText.isEmpty ? exercises : exercises.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 }
 

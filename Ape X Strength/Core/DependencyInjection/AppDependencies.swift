@@ -25,11 +25,18 @@ final class AppDependencies {
     static let live: AppDependencies = {
         let persistence = PersistenceController.shared
         let context = persistence.container.viewContext
+        let settings = UserDefaultsSettingsService()
+        let user: User
+        do {
+            user = try persistence.initializeTemporaryUser()
+        } catch {
+            fatalError("Unable to initialize the temporary user: \(error)")
+        }
         return AppDependencies(
             persistence: persistence,
-            workouts: CoreDataWorkoutRepository(context: context),
-            exercises: CoreDataExerciseRepository(context: context),
-            settings: UserDefaultsSettingsService(),
+            workouts: CoreDataWorkoutRepository(context: context, settings: settings, user: user),
+            exercises: CoreDataExerciseRepository(context: context, user: user),
+            settings: settings,
             sync: NoOpSyncService()
         )
     }()
@@ -37,11 +44,18 @@ final class AppDependencies {
     static let preview: AppDependencies = {
         let persistence = PersistenceController.preview
         let context = persistence.container.viewContext
+        let settings = UserDefaultsSettingsService(defaults: UserDefaults(suiteName: "preview")!)
+        let user: User
+        do {
+            user = try persistence.initializeTemporaryUser()
+        } catch {
+            fatalError("Unable to initialize the preview user: \(error)")
+        }
         return AppDependencies(
             persistence: persistence,
-            workouts: CoreDataWorkoutRepository(context: context),
-            exercises: CoreDataExerciseRepository(context: context),
-            settings: UserDefaultsSettingsService(defaults: UserDefaults(suiteName: "preview")!),
+            workouts: CoreDataWorkoutRepository(context: context, settings: settings, user: user),
+            exercises: CoreDataExerciseRepository(context: context, user: user),
+            settings: settings,
             sync: NoOpSyncService()
         )
     }()

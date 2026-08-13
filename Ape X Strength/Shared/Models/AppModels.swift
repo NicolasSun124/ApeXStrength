@@ -17,7 +17,15 @@ struct WorkoutPreview: Equatable {
     let exercises: [WorkoutPreviewExercise]
 }
 
+struct WorkoutSessionDraft {
+    let id: NSManagedObjectID
+    let workout: WorkoutPreview
+    let startedAt: Date
+    let completedSetNumbersByExerciseID: [NSManagedObjectID: Set<Int>]
+}
+
 struct CompletedWorkoutSession {
+    let id: NSManagedObjectID
     let workoutID: NSManagedObjectID
     let startedAt: Date
     let endedAt: Date
@@ -25,12 +33,12 @@ struct CompletedWorkoutSession {
     let exercises: [CompletedSessionExercise]
 }
 
-struct CompletedSessionExercise {
+struct CompletedSessionExercise: Equatable {
     let exerciseID: NSManagedObjectID
     let sets: [CompletedSessionSet]
 }
 
-struct CompletedSessionSet {
+struct CompletedSessionSet: Equatable {
     let number: Int
     let reps: Int
     let timeSeconds: Double
@@ -72,6 +80,7 @@ struct WorkoutPreviewExercise: Identifiable, Equatable {
     let difficultyType: ExerciseDifficultyType
     let targetRestSeconds: Int
     let sets: [WorkoutPreviewSet]
+    let alternates: [ExerciseListItem]
 }
 
 struct WorkoutPreviewSet: Identifiable, Equatable {
@@ -179,6 +188,7 @@ struct NewWorkout {
     let exerciseIDs: [NSManagedObjectID]
     let selectedTagIDs: Set<NSManagedObjectID>
     let plannedSetsByExerciseID: [NSManagedObjectID: [NewPlannedSet]]
+    let alternateExerciseIDsByExerciseID: [NSManagedObjectID: Set<NSManagedObjectID>]
 }
 
 struct NewPlannedSet {
@@ -289,4 +299,23 @@ struct ExerciseDetail: Identifiable, Equatable {
 struct AppSettings: Equatable {
     var weightUnit: String
     var restTimerNotificationsEnabled: Bool
+}
+
+enum WeightUnit: String {
+    case pounds = "lbs"
+    case kilograms = "kg"
+
+    private static let poundsPerKilogram = Decimal(string: "2.2046226218")!
+
+    init(setting: String) {
+        self = setting == Self.kilograms.rawValue ? .kilograms : .pounds
+    }
+
+    func pounds(fromDisplayed value: Decimal) -> Decimal {
+        self == .kilograms ? value * Self.poundsPerKilogram : value
+    }
+
+    func displayed(fromPounds value: Decimal) -> Decimal {
+        self == .kilograms ? value / Self.poundsPerKilogram : value
+    }
 }
