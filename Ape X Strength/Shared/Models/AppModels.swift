@@ -64,9 +64,11 @@ struct WorkoutSessionHistoryItem: Identifiable {
 struct WorkoutSessionHistoryExercise: Identifiable {
     let id: NSManagedObjectID
     let name: String
+    let primaryMuscleName: String
     let primaryMuscleColorHex: String
     let repType: ExerciseRepType
     let difficultyType: ExerciseDifficultyType
+    let targetRestSeconds: Int
     let sets: [CompletedSessionSet]
 }
 

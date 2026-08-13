@@ -3,6 +3,7 @@ import SwiftUI
 struct ExercisesView: View {
     @StateObject private var viewModel: ExercisesViewModel
     @State private var isCreatingExercise = false
+    @State private var searchText = ""
     private let repository: any ExerciseRepository
 
     init(viewModel: @autoclosure @escaping () -> ExercisesViewModel, repository: any ExerciseRepository) {
@@ -27,11 +28,20 @@ struct ExercisesView: View {
                         action: { isCreatingExercise = true }
                     )
                 case .loaded:
-                    exerciseList
+                    if filteredExercises.isEmpty {
+                        ApeEmptyState(
+                            icon: "magnifyingglass",
+                            title: "No matching exercises",
+                            message: "Try searching for a different exercise."
+                        )
+                    } else {
+                        exerciseList
+                    }
                 }
             }
             .background(ApeColor.background.ignoresSafeArea())
             .navigationTitle("Exercises")
+            .searchable(text: $searchText, prompt: "Search exercises")
             .toolbarBackground(ApeColor.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
@@ -51,7 +61,7 @@ struct ExercisesView: View {
     private var exerciseList: some View {
         ScrollView {
             LazyVStack(spacing: ApeSpacing.sm) {
-                ForEach(viewModel.exercises) { exercise in
+                ForEach(filteredExercises) { exercise in
                     NavigationLink {
                         ExerciseDetailView(
                             viewModel: ExerciseDetailViewModel(id: exercise.id, repository: repository),
@@ -87,6 +97,16 @@ struct ExercisesView: View {
             .padding(ApeSpacing.md)
         }
         .refreshable { viewModel.load() }
+    }
+
+    private var filteredExercises: [ExerciseListItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return viewModel.exercises }
+        return viewModel.exercises.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || $0.repType.title.localizedCaseInsensitiveContains(query)
+                || $0.difficultyType.title.localizedCaseInsensitiveContains(query)
+        }
     }
 }
 

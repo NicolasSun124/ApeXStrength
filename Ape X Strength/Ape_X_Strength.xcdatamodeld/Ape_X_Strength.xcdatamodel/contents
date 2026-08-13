@@ -8,6 +8,7 @@
         <attribute name="preferredWeightUnit" attributeType="String" defaultValueString="lbs"/>
         <attribute name="serverID" attributeType="UUID" usesScalarValueType="NO"/>
         <relationship name="customExercises" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Exercise" inverseName="owner" inverseEntity="Exercise"/>
+        <relationship name="hiddenExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Exercise" inverseName="hiddenByUsers" inverseEntity="Exercise"/>
         <relationship name="sessions" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="WorkoutSession" inverseName="user" inverseEntity="WorkoutSession"/>
         <relationship name="workoutTemplates" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="WorkoutTemplate" inverseName="user" inverseEntity="WorkoutTemplate"/>
     </entity>
@@ -33,6 +34,7 @@
         <relationship name="sessionExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="SessionExercise" inverseName="exercise" inverseEntity="SessionExercise"/>
         <relationship name="templateExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="TemplateExercise" inverseName="exercise" inverseEntity="TemplateExercise"/>
         <relationship name="alternateForTemplateExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="TemplateExercise" inverseName="alternateExercises" inverseEntity="TemplateExercise"/>
+        <relationship name="hiddenByUsers" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="User" inverseName="hiddenExercises" inverseEntity="User"/>
     </entity>
     <entity name="Tag" representedClassName="Tag" syncable="YES" codeGenerationType="class">
         <attribute name="clientUUID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
@@ -98,6 +100,12 @@
         <attribute name="clientUUID" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="position" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="serverID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="snapshotDifficultyType" optional="YES" attributeType="String"/>
+        <attribute name="snapshotExerciseName" optional="YES" attributeType="String"/>
+        <attribute name="snapshotPrimaryMuscleColorHex" optional="YES" attributeType="String"/>
+        <attribute name="snapshotPrimaryMuscleName" optional="YES" attributeType="String"/>
+        <attribute name="snapshotTargetRestSeconds" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="snapshotTrackingType" optional="YES" attributeType="String"/>
         <attribute name="syncState" attributeType="String" defaultValueString="pendingCreate"/>
         <relationship name="exercise" maxCount="1" deletionRule="Nullify" destinationEntity="Exercise" inverseName="sessionExercises" inverseEntity="Exercise"/>
         <relationship name="session" maxCount="1" deletionRule="Nullify" destinationEntity="WorkoutSession" inverseName="sessionExercises" inverseEntity="WorkoutSession"/>
