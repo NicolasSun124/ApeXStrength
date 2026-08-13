@@ -29,7 +29,8 @@ struct RootTabView: View {
             SettingsView(
                 viewModel: SettingsViewModel(service: dependencies.settings),
                 exerciseRepository: dependencies.exercises,
-                workoutRepository: dependencies.workouts
+                workoutRepository: dependencies.workouts,
+                resetData: dependencies.persistence.resetUserData
             )
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)

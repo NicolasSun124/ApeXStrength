@@ -330,6 +330,7 @@ struct ExerciseDetail: Identifiable, Equatable {
 
 struct AppSettings: Equatable {
     var weightUnit: String
+    var distanceUnit: String
     var restTimerNotificationsEnabled: Bool
 }
 
@@ -349,5 +350,14 @@ enum WeightUnit: String {
 
     func displayed(fromPounds value: Decimal) -> Decimal {
         self == .kilograms ? value / Self.poundsPerKilogram : value
+    }
+}
+
+enum DistanceUnit: String {
+    case kilometers = "km"
+    case miles = "mi"
+
+    init(setting: String) {
+        self = setting == Self.miles.rawValue ? .miles : .kilometers
     }
 }

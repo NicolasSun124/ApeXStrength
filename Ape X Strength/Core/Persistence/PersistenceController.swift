@@ -43,6 +43,34 @@ struct PersistenceController {
     }
 
     @MainActor
+    func resetUserData() throws {
+        let context = container.viewContext
+        let userRequest = User.fetchRequest()
+        userRequest.fetchLimit = 1
+
+        guard let user = try context.fetch(userRequest).first else { return }
+
+        let sessionRequest = WorkoutSession.fetchRequest()
+        sessionRequest.predicate = NSPredicate(format: "user == %@", user)
+        try context.fetch(sessionRequest).forEach(context.delete)
+
+        let workoutRequest = WorkoutTemplate.fetchRequest()
+        workoutRequest.predicate = NSPredicate(format: "user == %@", user)
+        try context.fetch(workoutRequest).forEach(context.delete)
+
+        let exerciseRequest = Exercise.fetchRequest()
+        exerciseRequest.predicate = NSPredicate(format: "owner == %@", user)
+        try context.fetch(exerciseRequest).forEach(context.delete)
+
+        try context.fetch(Tag.fetchRequest()).forEach(context.delete)
+        user.hiddenExercises = nil
+
+        if context.hasChanges {
+            try context.save()
+        }
+    }
+
+    @MainActor
     static let preview: PersistenceController = {
         let persistence = PersistenceController(inMemory: true)
         let context = persistence.container.viewContext

@@ -8,6 +8,7 @@ protocol SettingsService {
 final class UserDefaultsSettingsService: SettingsService {
     private enum Key {
         static let weightUnit = "settings.weightUnit"
+        static let distanceUnit = "settings.distanceUnit"
         static let restNotifications = "settings.restTimerNotifications"
     }
 
@@ -19,14 +20,17 @@ final class UserDefaultsSettingsService: SettingsService {
 
     func load() -> AppSettings {
         let storedUnit = defaults.string(forKey: Key.weightUnit)
+        let storedDistanceUnit = defaults.string(forKey: Key.distanceUnit)
         return AppSettings(
             weightUnit: WeightUnit(setting: storedUnit ?? "lbs").rawValue,
+            distanceUnit: DistanceUnit(setting: storedDistanceUnit ?? "km").rawValue,
             restTimerNotificationsEnabled: defaults.object(forKey: Key.restNotifications) as? Bool ?? true
         )
     }
 
     func save(_ settings: AppSettings) {
         defaults.set(settings.weightUnit, forKey: Key.weightUnit)
+        defaults.set(settings.distanceUnit, forKey: Key.distanceUnit)
         defaults.set(settings.restTimerNotificationsEnabled, forKey: Key.restNotifications)
     }
 }
