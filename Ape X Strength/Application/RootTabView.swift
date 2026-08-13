@@ -26,7 +26,11 @@ struct RootTabView: View {
                 .tabItem { Label("Exercises", systemImage: "figure.strengthtraining.traditional") }
                 .tag(AppTab.exercises)
 
-            SettingsView(viewModel: SettingsViewModel(service: dependencies.settings))
+            SettingsView(
+                viewModel: SettingsViewModel(service: dependencies.settings),
+                exerciseRepository: dependencies.exercises,
+                workoutRepository: dependencies.workouts
+            )
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
         }

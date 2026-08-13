@@ -30,6 +30,7 @@ struct CompletedWorkoutSession {
     let startedAt: Date
     let endedAt: Date
     let rating: Int
+    let note: String?
     let exercises: [CompletedSessionExercise]
 }
 
@@ -45,6 +46,28 @@ struct CompletedSessionSet: Equatable {
     let distance: Decimal
     let weight: Decimal
     let completed: Bool
+}
+
+struct WorkoutSessionHistoryItem: Identifiable {
+    let id: NSManagedObjectID
+    let workoutName: String
+    let startedAt: Date
+    let endedAt: Date
+    let durationSeconds: Int
+    let volume: Decimal
+    let percentCompleted: Double
+    let rating: Int
+    let note: String?
+    let exercises: [WorkoutSessionHistoryExercise]
+}
+
+struct WorkoutSessionHistoryExercise: Identifiable {
+    let id: NSManagedObjectID
+    let name: String
+    let primaryMuscleColorHex: String
+    let repType: ExerciseRepType
+    let difficultyType: ExerciseDifficultyType
+    let sets: [CompletedSessionSet]
 }
 
 enum ImprovementTrend {
@@ -292,8 +315,10 @@ struct ExerciseDetail: Identifiable, Equatable {
     let repType: ExerciseRepType
     let difficultyType: ExerciseDifficultyType
     let targetRestSeconds: Int
-    let primaryMuscle: String
-    let secondaryMuscles: [String]
+    let primaryMuscle: MuscleItem
+    let secondaryMuscles: [MuscleItem]
+    let isGlobal: Bool
+    let isArchived: Bool
 }
 
 struct AppSettings: Equatable {

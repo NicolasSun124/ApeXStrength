@@ -3,20 +3,24 @@ import SwiftUI
 struct WorkoutFinishView: View {
     let workoutName: String
     let improvements: [ExerciseImprovementSummary]
-    let onFinish: (_ shouldSave: Bool, _ rating: Int) -> String?
+    let onFinish: (_ shouldSave: Bool, _ rating: Int, _ note: String) -> String?
     @State private var rating = 3
+    @State private var note = ""
     @State private var comparison: ImprovementComparison = .lifetime
     @State private var isConfirmingFinish = false
     @State private var saveErrorMessage: String?
+    @FocusState private var isNoteFocused: Bool
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: ApeSpacing.lg) {
                 ratingSection
+                noteSection
                 improvementsSection
             }
             .padding(ApeSpacing.md)
         }
+        .scrollDismissesKeyboard(.interactively)
         .background(ApeColor.background.ignoresSafeArea())
         .navigationTitle(workoutName)
         .navigationBarTitleDisplayMode(.inline)
@@ -30,6 +34,10 @@ struct WorkoutFinishView: View {
                         .font(.apeHeadline)
                 }
                 .accessibilityLabel("End workout")
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { isNoteFocused = false }
             }
         }
         .confirmationDialog(
@@ -121,6 +129,39 @@ struct WorkoutFinishView: View {
         }
     }
 
+    private var noteSection: some View {
+        VStack(alignment: .leading, spacing: ApeSpacing.sm) {
+            Text("Session Note")
+                .font(.apeHeadline)
+                .foregroundStyle(ApeColor.textPrimary)
+
+            ZStack(alignment: .topLeading) {
+                if note.isEmpty {
+                    Text("How did the session feel?")
+                        .font(.apeBody)
+                        .foregroundStyle(ApeColor.textSecondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                }
+
+                TextEditor(text: $note)
+                    .font(.apeBody)
+                    .foregroundStyle(ApeColor.textPrimary)
+                    .focused($isNoteFocused)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 110)
+                    .accessibilityLabel("Session note")
+            }
+            .padding(ApeSpacing.sm)
+            .background(ApeColor.control)
+            .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
+        }
+        .padding(ApeSpacing.md)
+        .background(ApeColor.surface)
+        .clipShape(RoundedRectangle(cornerRadius: ApeRadius.card))
+    }
+
     private func exerciseImprovementCard(_ improvement: ExerciseImprovementSummary) -> some View {
         let metrics = comparison == .lifetime ? improvement.lifetime : improvement.previous
         return VStack(alignment: .leading, spacing: 0) {
@@ -162,7 +203,7 @@ struct WorkoutFinishView: View {
     }
 
     private func finish(shouldSave: Bool) {
-        saveErrorMessage = onFinish(shouldSave, rating)
+        saveErrorMessage = onFinish(shouldSave, rating, note)
     }
 
     private let ratingEmojis = ["😫", "😕", "😐", "🙂", "🤩"]

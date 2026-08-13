@@ -3,8 +3,10 @@ import SwiftUI
 struct WorkoutsView: View {
     @StateObject private var viewModel: WorkoutsViewModel
     @State private var isCreatingWorkout = false
+    @State private var isShowingSessionHistory = false
     @State private var isShowingDraftPrompt = false
     @State private var isResumingSession = false
+    @State private var searchText = ""
     private let repository: any WorkoutRepository
 
     init(viewModel: @autoclosure @escaping () -> WorkoutsViewModel, repository: any WorkoutRepository) {
@@ -37,9 +39,17 @@ struct WorkoutsView: View {
             .toolbarBackground(ApeColor.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .searchable(text: $searchText, prompt: "Search workouts")
             .toolbar {
-                Button(action: { isCreatingWorkout = true }) { Image(systemName: "plus") }
-                    .accessibilityLabel("Create workout")
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button(action: { isShowingSessionHistory = true }) { Image(systemName: "list.bullet") }
+                        .accessibilityLabel("Session history")
+                    Button(action: { isCreatingWorkout = true }) { Image(systemName: "plus") }
+                        .accessibilityLabel("Create workout")
+                }
+            }
+            .navigationDestination(isPresented: $isShowingSessionHistory) {
+                WorkoutSessionHistoryView(repository: repository)
             }
             .navigationDestination(isPresented: $isCreatingWorkout) {
                 CreateWorkoutView(viewModel: CreateWorkoutViewModel(repository: repository)) {
@@ -91,7 +101,7 @@ struct WorkoutsView: View {
     private var workoutList: some View {
         ScrollView {
             LazyVStack(spacing: ApeSpacing.sm) {
-                ForEach(viewModel.workouts) { workout in
+                ForEach(filteredWorkouts) { workout in
                     NavigationLink {
                         WorkoutPreviewView(
                             viewModel: WorkoutPreviewViewModel(workoutID: workout.id, repository: repository),
@@ -107,6 +117,15 @@ struct WorkoutsView: View {
             .padding(ApeSpacing.md)
         }
         .refreshable { viewModel.load() }
+    }
+
+    private var filteredWorkouts: [WorkoutListItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return viewModel.workouts }
+        return viewModel.workouts.filter { workout in
+            workout.name.localizedCaseInsensitiveContains(query) ||
+                workout.tags.contains { $0.name.localizedCaseInsensitiveContains(query) }
+        }
     }
 }
 

@@ -5,7 +5,7 @@ import Foundation
 final class ExerciseDetailViewModel: ObservableObject {
     @Published private(set) var state: ViewLoadState = .idle
     @Published private(set) var exercise: ExerciseDetail?
-    private let id: NSManagedObjectID
+    private var id: NSManagedObjectID
     private let repository: any ExerciseRepository
 
     init(id: NSManagedObjectID, repository: any ExerciseRepository) {
@@ -21,5 +21,15 @@ final class ExerciseDetailViewModel: ObservableObject {
         } catch {
             state = .failed(error.localizedDescription)
         }
+    }
+
+    func archive() -> Bool {
+        do { try repository.archiveExercise(id: id); return true }
+        catch { state = .failed(error.localizedDescription); return false }
+    }
+
+    func showExercise(id: NSManagedObjectID) {
+        self.id = id
+        load()
     }
 }

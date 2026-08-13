@@ -4,9 +4,12 @@ import Foundation
 @MainActor
 protocol WorkoutRepository {
     func fetchWorkouts() throws -> [WorkoutListItem]
+    func fetchArchivedWorkouts() throws -> [WorkoutListItem]
     func fetchWorkoutPreview(id: NSManagedObjectID) throws -> WorkoutPreview
     func fetchActiveSessionDraft() throws -> WorkoutSessionDraft?
+    func fetchSessionHistory() throws -> [WorkoutSessionHistoryItem]
     func archiveWorkout(id: NSManagedObjectID) throws
+    func restoreWorkout(id: NSManagedObjectID) throws
     func removeExercise(id: NSManagedObjectID, fromWorkout id: NSManagedObjectID) throws
     func reorderExercises(_ exerciseIDs: [NSManagedObjectID], inWorkout id: NSManagedObjectID) throws
     func setAlternateExercises(_ alternateIDs: Set<NSManagedObjectID>, forExercise id: NSManagedObjectID, inWorkout workoutID: NSManagedObjectID) throws
@@ -29,9 +32,13 @@ protocol WorkoutRepository {
 @MainActor
 protocol ExerciseRepository {
     func fetchExercises() throws -> [ExerciseListItem]
+    func fetchArchivedExercises() throws -> [ExerciseListItem]
     func fetchExercise(id: NSManagedObjectID) throws -> ExerciseDetail
     func fetchMuscles() throws -> [MuscleItem]
     @discardableResult func createExercise(_ input: NewExercise) throws -> ExerciseListItem
+    @discardableResult func updateExercise(id: NSManagedObjectID, input: NewExercise) throws -> NSManagedObjectID
+    func archiveExercise(id: NSManagedObjectID) throws
+    func restoreExercise(id: NSManagedObjectID) throws
 }
 
 @MainActor
@@ -70,6 +77,13 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 statistics: workoutStatistics(from: Array(sessions))
             )
         }
+    }
+
+    func fetchArchivedWorkouts() throws -> [WorkoutListItem] {
+        let request = WorkoutTemplate.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
+        request.predicate = NSPredicate(format: "isArchived == YES")
+        return try context.fetch(request).map(workoutListItem)
     }
 
     func fetchWorkoutPreview(id: NSManagedObjectID) throws -> WorkoutPreview {
@@ -180,6 +194,55 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         )
     }
 
+    func fetchSessionHistory() throws -> [WorkoutSessionHistoryItem] {
+        let request = WorkoutSession.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "endedAt", ascending: false)]
+        request.predicate = NSPredicate(format: "endedAt != nil AND user == %@", user)
+
+        return try context.fetch(request).compactMap { session in
+            guard let startedAt = session.startedAt, let endedAt = session.endedAt else { return nil }
+            let exercises = (session.sessionExercises?.array as? [SessionExercise] ?? [])
+                .sorted { $0.position < $1.position }
+                .compactMap { occurrence -> WorkoutSessionHistoryExercise? in
+                    guard let exercise = occurrence.exercise else { return nil }
+                    let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
+                    let sets = (occurrence.sets?.array as? [SessionSet] ?? [])
+                        .sorted { $0.setNumber < $1.setNumber }
+                        .map { set in
+                            CompletedSessionSet(
+                                number: Int(set.setNumber),
+                                reps: Int(set.reps),
+                                timeSeconds: set.timeSeconds,
+                                distance: set.distance as Decimal? ?? 0,
+                                weight: selectedWeightUnit.displayed(fromPounds: set.weight as Decimal? ?? 0),
+                                completed: set.completed
+                            )
+                        }
+                    return WorkoutSessionHistoryExercise(
+                        id: exercise.objectID,
+                        name: exercise.name ?? "Untitled Exercise",
+                        primaryMuscleColorHex: exercise.primaryMuscle?.colorHex ?? "8AC5FF",
+                        repType: configuration.repType,
+                        difficultyType: configuration.difficultyType,
+                        sets: sets
+                    )
+                }
+
+            return WorkoutSessionHistoryItem(
+                id: session.objectID,
+                workoutName: session.workoutTemplate?.name ?? "Workout",
+                startedAt: startedAt,
+                endedAt: endedAt,
+                durationSeconds: Int(session.durationSeconds),
+                volume: selectedWeightUnit.displayed(fromPounds: session.volumeWeight as Decimal? ?? 0),
+                percentCompleted: session.percentCompleted,
+                rating: Int(session.rating),
+                note: session.note,
+                exercises: exercises
+            )
+        }
+    }
+
     func archiveWorkout(id: NSManagedObjectID) throws {
         guard let workout = try context.existingObject(with: id) as? WorkoutTemplate,
               !workout.isDeleted,
@@ -188,6 +251,22 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         }
 
         workout.isArchived = true
+        workout.updatedAt = Date()
+        workout.syncState = "pendingUpdate"
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    func restoreWorkout(id: NSManagedObjectID) throws {
+        guard let workout = try context.existingObject(with: id) as? WorkoutTemplate,
+              !workout.isDeleted, workout.isArchived else {
+            throw WorkoutRepositoryError.workoutNotFound
+        }
+        workout.isArchived = false
         workout.updatedAt = Date()
         workout.syncState = "pendingUpdate"
         do {
@@ -383,6 +462,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         session.endedAt = input.endedAt
         session.durationSeconds = Int64(max(0, input.endedAt.timeIntervalSince(input.startedAt)))
         session.rating = Int16(input.rating)
+        session.note = input.note
         session.syncState = "pendingCreate"
         session.workoutTemplate = workout
         session.user = workout.user
@@ -819,6 +899,24 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         )
     }
 
+    private func workoutListItem(_ workout: WorkoutTemplate) -> WorkoutListItem {
+        let sessions = (workout.sessions as? Set<WorkoutSession> ?? [])
+            .filter { $0.endedAt != nil }
+        return WorkoutListItem(
+            id: workout.objectID,
+            name: workout.name ?? "Untitled Workout",
+            exerciseCount: workout.templateExercises?.count ?? 0,
+            updatedAt: workout.updatedAt ?? .distantPast,
+            tags: (workout.tags as? Set<Tag> ?? [])
+                .compactMap { tag in
+                    guard let name = tag.name else { return nil }
+                    return WorkoutTagSummary(name: name, color: TagColor(name: name))
+                }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
+            statistics: workoutStatistics(from: Array(sessions))
+        )
+    }
+
     private static let defaultTags = [
         "Upper",
         "Lower",
@@ -875,7 +973,17 @@ final class CoreDataExerciseRepository: ExerciseRepository {
         request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
         request.predicate = NSPredicate(format: "isArchived == NO")
 
-        return try context.fetch(request).map { exercise in
+        return try context.fetch(request).map(exerciseListItem)
+    }
+
+    func fetchArchivedExercises() throws -> [ExerciseListItem] {
+        let request = Exercise.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
+        request.predicate = NSPredicate(format: "isArchived == YES")
+        return try context.fetch(request).map(exerciseListItem)
+    }
+
+    private func exerciseListItem(_ exercise: Exercise) -> ExerciseListItem {
             let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
             return ExerciseListItem(
                 id: exercise.objectID,
@@ -885,13 +993,12 @@ final class CoreDataExerciseRepository: ExerciseRepository {
                 difficultyType: configuration.difficultyType,
                 targetRestSeconds: Int(exercise.targetRestSeconds)
             )
-        }
     }
 
     func fetchExercise(id: NSManagedObjectID) throws -> ExerciseDetail {
         guard let exercise = try context.existingObject(with: id) as? Exercise,
               !exercise.isDeleted,
-              !exercise.isArchived else {
+              let primaryMuscle = exercise.primaryMuscle else {
             throw ExerciseRepositoryError.exerciseNotFound
         }
 
@@ -902,10 +1009,12 @@ final class CoreDataExerciseRepository: ExerciseRepository {
             repType: configuration.repType,
             difficultyType: configuration.difficultyType,
             targetRestSeconds: Int(exercise.targetRestSeconds),
-            primaryMuscle: exercise.primaryMuscle?.name ?? "Not set",
+            primaryMuscle: muscleItem(primaryMuscle),
             secondaryMuscles: (exercise.secondaryMuscles as? Set<Muscle> ?? [])
-                .compactMap(\.name)
-                .sorted()
+                .map(muscleItem)
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
+            isGlobal: exercise.owner == nil,
+            isArchived: exercise.isArchived
         )
     }
 
@@ -980,6 +1089,79 @@ final class CoreDataExerciseRepository: ExerciseRepository {
             difficultyType: input.difficultyType,
             targetRestSeconds: input.targetRestSeconds
         )
+    }
+
+    @discardableResult
+    func updateExercise(id: NSManagedObjectID, input: NewExercise) throws -> NSManagedObjectID {
+        guard let original = try context.existingObject(with: id) as? Exercise, !original.isDeleted else {
+            throw ExerciseRepositoryError.exerciseNotFound
+        }
+        let exercise: Exercise
+        if original.owner == nil {
+            exercise = Exercise(context: context)
+            exercise.clientUUID = UUID()
+            exercise.createdAt = Date()
+            exercise.owner = user
+            exercise.syncState = "pendingCreate"
+        } else {
+            exercise = original
+            exercise.syncState = "pendingUpdate"
+        }
+        try apply(input, to: exercise)
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+        return exercise.objectID
+    }
+
+    func archiveExercise(id: NSManagedObjectID) throws {
+        let exercise = try editableExercise(id: id)
+        exercise.isArchived = true
+        exercise.syncState = "pendingUpdate"
+        try saveChanges()
+    }
+
+    func restoreExercise(id: NSManagedObjectID) throws {
+        guard let exercise = try context.existingObject(with: id) as? Exercise,
+              !exercise.isDeleted, exercise.isArchived else {
+            throw ExerciseRepositoryError.exerciseNotFound
+        }
+        exercise.isArchived = false
+        exercise.syncState = "pendingUpdate"
+        try saveChanges()
+    }
+
+    private func apply(_ input: NewExercise, to exercise: Exercise) throws {
+        let name = input.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw ExerciseRepositoryError.nameRequired }
+        guard let primary = try context.existingObject(with: input.primaryMuscleID) as? Muscle else {
+            throw ExerciseRepositoryError.primaryMuscleRequired
+        }
+        exercise.name = name
+        exercise.trackingType = ExerciseConfiguration(repType: input.repType, difficultyType: input.difficultyType).storageValue
+        exercise.targetRestSeconds = Int32(input.targetRestSeconds)
+        exercise.primaryMuscle = primary
+        exercise.secondaryMuscles = Set(try input.secondaryMuscleIDs.compactMap {
+            try context.existingObject(with: $0) as? Muscle
+        }) as NSSet
+        exercise.isArchived = false
+    }
+
+    private func editableExercise(id: NSManagedObjectID) throws -> Exercise {
+        guard let exercise = try context.existingObject(with: id) as? Exercise,
+              !exercise.isDeleted, !exercise.isArchived else { throw ExerciseRepositoryError.exerciseNotFound }
+        return exercise
+    }
+
+    private func saveChanges() throws {
+        do { try context.save() } catch { context.rollback(); throw error }
+    }
+
+    private func muscleItem(_ muscle: Muscle) -> MuscleItem {
+        return MuscleItem(id: muscle.objectID, name: muscle.name ?? "Unknown", colorHex: muscle.colorHex ?? "8AC5FF")
     }
 
     private static let defaultMuscles = [

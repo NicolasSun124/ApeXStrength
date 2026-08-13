@@ -2,9 +2,20 @@ import SwiftUI
 
 struct ExerciseDetailView: View {
     @StateObject private var viewModel: ExerciseDetailViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var isEditing = false
+    @State private var confirmsArchive = false
+    private let repository: any ExerciseRepository
+    private let onChanged: () -> Void
 
-    init(viewModel: @autoclosure @escaping () -> ExerciseDetailViewModel) {
+    init(
+        viewModel: @autoclosure @escaping () -> ExerciseDetailViewModel,
+        repository: any ExerciseRepository,
+        onChanged: @escaping () -> Void
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.repository = repository
+        self.onChanged = onChanged
     }
 
     var body: some View {
@@ -19,6 +30,34 @@ struct ExerciseDetailView: View {
         .background(ApeColor.background.ignoresSafeArea())
         .navigationTitle(viewModel.exercise?.name ?? "Exercise")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(viewModel.exercise?.isGlobal == true ? "Copy & Edit" : "Edit", systemImage: "pencil") {
+                        isEditing = true
+                    }
+                    Button("Delete", systemImage: "trash", role: .destructive) { confirmsArchive = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .sheet(isPresented: $isEditing) {
+            CreateExerciseView(
+                viewModel: CreateExerciseViewModel(repository: repository, exerciseID: viewModel.exercise?.id)
+            ) { savedExerciseID in
+                viewModel.showExercise(id: savedExerciseID)
+                onChanged()
+            }
+        }
+        .confirmationDialog("Archive this exercise?", isPresented: $confirmsArchive, titleVisibility: .visible) {
+            Button("Archive Exercise", role: .destructive) {
+                if viewModel.archive() { onChanged(); dismiss() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The exercise can be restored later from Archived Exercises.")
+        }
         .task { if viewModel.state == .idle { viewModel.load() } }
     }
 
@@ -28,8 +67,8 @@ struct ExerciseDetailView: View {
                 configurationRow("Rep type", exercise.repType.title)
                 configurationRow("Difficulty type", exercise.difficultyType.title)
                 configurationRow("Default rest time", restLabel(exercise.targetRestSeconds).replacingOccurrences(of: " rest", with: ""))
-                configurationRow("Primary muscle", exercise.primaryMuscle)
-                configurationRow("Secondary muscles", exercise.secondaryMuscles.isEmpty ? "None" : exercise.secondaryMuscles.joined(separator: ", "))
+                configurationRow("Primary muscle", exercise.primaryMuscle.name)
+                configurationRow("Secondary muscles", exercise.secondaryMuscles.isEmpty ? "None" : exercise.secondaryMuscles.map(\.name).joined(separator: ", "))
             }
             .padding(ApeSpacing.md)
         }

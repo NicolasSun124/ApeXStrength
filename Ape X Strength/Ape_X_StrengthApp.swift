@@ -9,6 +9,7 @@ import SwiftUI
 
 @main
 struct Ape_X_StrengthApp: App {
+    @UIApplicationDelegateAdaptor(NotificationDelegate.self) private var notificationDelegate
     private let dependencies = AppDependencies.live
 
     var body: some Scene {

@@ -23,6 +23,7 @@ struct ActiveWorkoutView: View {
     @State private var editingTimeSet: TimeSetTarget?
     @State private var timePickerMinutes = 0
     @State private var timePickerSeconds = 0
+    @StateObject private var restTimerCoordinator = RestTimerCoordinator()
     @FocusState private var isNumericFieldFocused: Bool
 
     init(
@@ -176,8 +177,8 @@ struct ActiveWorkoutView: View {
             WorkoutFinishView(
                 workoutName: workout.name,
                 improvements: currentImprovements()
-            ) { shouldSave, rating in
-                finishSession(shouldSave: shouldSave, rating: rating)
+            ) { shouldSave, rating, note in
+                finishSession(shouldSave: shouldSave, rating: rating, note: note)
             }
         }
         .task { loadAvailableExercises() }
@@ -369,7 +370,7 @@ struct ActiveWorkoutView: View {
         )
     }
 
-    private func finishSession(shouldSave: Bool, rating: Int) -> String? {
+    private func finishSession(shouldSave: Bool, rating: Int, note: String) -> String? {
         do {
             if shouldSave {
                 try repository.saveCompletedSession(CompletedWorkoutSession(
@@ -378,6 +379,7 @@ struct ActiveWorkoutView: View {
                     startedAt: startedAt,
                     endedAt: Date(),
                     rating: rating,
+                    note: normalizedNote(note),
                     exercises: exercises.map { exercise in
                         CompletedSessionExercise(
                             exerciseID: exercise.exerciseID,
@@ -405,9 +407,15 @@ struct ActiveWorkoutView: View {
         return nil
     }
 
+    private func normalizedNote(_ note: String) -> String? {
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func abortSession() {
         do {
             try repository.discardSession(id: sessionID)
+            Task { await restTimerCoordinator.cancel() }
             restTimerEnd = nil
             dismiss()
         } catch {
@@ -453,6 +461,7 @@ struct ActiveWorkoutView: View {
     }
 
     private func closeFinishedSession() {
+        Task { await restTimerCoordinator.cancel() }
         restTimerEnd = nil
         isShowingFinishSummary = false
 
@@ -480,6 +489,7 @@ struct ActiveWorkoutView: View {
 
     private func clearRestTimerWhenFinished() async {
         guard let scheduledEnd = restTimerEnd else { return }
+        await restTimerCoordinator.start(until: scheduledEnd, workoutName: workout.name)
         let delay = max(0, scheduledEnd.timeIntervalSinceNow)
         do {
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -488,9 +498,9 @@ struct ActiveWorkoutView: View {
         }
         guard restTimerEnd == scheduledEnd else { return }
 
+        await restTimerCoordinator.finish()
         restTimerEnd = nil
         isRestTimerPresented = false
-        // TODO: Send a push notification when the rest timer finishes.
     }
 
     fileprivate static func timerText(seconds: Int) -> String {

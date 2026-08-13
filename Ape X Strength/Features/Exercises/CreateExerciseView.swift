@@ -3,9 +3,12 @@ import SwiftUI
 struct CreateExerciseView: View {
     @StateObject private var viewModel: CreateExerciseViewModel
     @Environment(\.dismiss) private var dismiss
-    let onSaved: () -> Void
+    let onSaved: (ExerciseDetail.ID) -> Void
 
-    init(viewModel: @autoclosure @escaping () -> CreateExerciseViewModel, onSaved: @escaping () -> Void) {
+    init(
+        viewModel: @autoclosure @escaping () -> CreateExerciseViewModel,
+        onSaved: @escaping (ExerciseDetail.ID) -> Void
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel())
         self.onSaved = onSaved
     }
@@ -100,9 +103,9 @@ struct CreateExerciseView: View {
                         Text(error).font(.apeCallout).foregroundStyle(ApeColor.destructive)
                     }
 
-                    Button(viewModel.isSaving ? "Saving…" : "Save Exercise") {
-                        if viewModel.save() {
-                            onSaved()
+                    Button(viewModel.isSaving ? "Saving…" : (viewModel.isEditing ? "Save Changes" : "Save Exercise")) {
+                        if viewModel.save(), let savedExerciseID = viewModel.savedExerciseID {
+                            onSaved(savedExerciseID)
                             dismiss()
                         }
                     }
@@ -113,7 +116,7 @@ struct CreateExerciseView: View {
                 .padding(ApeSpacing.md)
             }
             .background(ApeColor.background.ignoresSafeArea())
-            .navigationTitle("Create Exercise")
+            .navigationTitle(viewModel.isEditing ? "Edit Exercise" : "Create Exercise")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

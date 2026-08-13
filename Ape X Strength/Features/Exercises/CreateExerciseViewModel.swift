@@ -12,12 +12,17 @@ final class CreateExerciseViewModel: ObservableObject {
     @Published private(set) var muscles: [MuscleItem] = []
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSaving = false
+    @Published private(set) var savedExerciseID: ExerciseDetail.ID?
 
     private let repository: any ExerciseRepository
+    private let exerciseID: ExerciseDetail.ID?
 
-    init(repository: any ExerciseRepository) {
+    init(repository: any ExerciseRepository, exerciseID: ExerciseDetail.ID? = nil) {
         self.repository = repository
+        self.exerciseID = exerciseID
     }
+
+    var isEditing: Bool { exerciseID != nil }
 
     var isValid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -31,6 +36,16 @@ final class CreateExerciseViewModel: ObservableObject {
     func load() {
         do {
             muscles = try repository.fetchMuscles()
+            if let exerciseID {
+                let exercise = try repository.fetchExercise(id: exerciseID)
+                name = exercise.name
+                repType = exercise.repType
+                difficultyType = exercise.difficultyType
+                restMinutes = exercise.targetRestSeconds / 60
+                restSeconds = exercise.targetRestSeconds % 60
+                primaryMuscleID = exercise.primaryMuscle.id
+                secondaryMuscleIDs = Set(exercise.secondaryMuscles.map(\.id))
+            }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -55,14 +70,19 @@ final class CreateExerciseViewModel: ObservableObject {
         isSaving = true
         defer { isSaving = false }
         do {
-            try repository.createExercise(NewExercise(
+            let input = NewExercise(
                 name: name,
                 repType: repType,
                 difficultyType: difficultyType,
                 targetRestSeconds: targetRestSeconds,
                 primaryMuscleID: primaryMuscleID,
                 secondaryMuscleIDs: secondaryMuscleIDs.subtracting([primaryMuscleID])
-            ))
+            )
+            if let exerciseID {
+                savedExerciseID = try repository.updateExercise(id: exerciseID, input: input)
+            } else {
+                savedExerciseID = try repository.createExercise(input).id
+            }
             return true
         } catch {
             errorMessage = error.localizedDescription

@@ -2,9 +2,17 @@ import SwiftUI
 
 struct SettingsView: View {
     @StateObject private var viewModel: SettingsViewModel
+    private let exerciseRepository: any ExerciseRepository
+    private let workoutRepository: any WorkoutRepository
 
-    init(viewModel: @autoclosure @escaping () -> SettingsViewModel) {
+    init(
+        viewModel: @autoclosure @escaping () -> SettingsViewModel,
+        exerciseRepository: any ExerciseRepository,
+        workoutRepository: any WorkoutRepository
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.exerciseRepository = exerciseRepository
+        self.workoutRepository = workoutRepository
     }
 
     var body: some View {
@@ -34,6 +42,52 @@ struct SettingsView: View {
                         }
                         .tint(ApeColor.primary)
                     }
+
+                    NavigationLink {
+                        ArchivedExercisesView(repository: exerciseRepository) { }
+                    } label: {
+                        ApeCard {
+                            HStack(spacing: ApeSpacing.md) {
+                                Image(systemName: "archivebox.fill")
+                                    .foregroundStyle(ApeColor.primary)
+                                    .frame(width: 36, height: 36)
+                                    .background(ApeColor.primarySoft)
+                                    .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
+                                VStack(alignment: .leading, spacing: ApeSpacing.xxs) {
+                                    Text("Archived Exercises").font(.apeHeadline)
+                                    Text("Restore exercises to your library")
+                                        .font(.apeCallout).foregroundStyle(ApeColor.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.apeCaption).foregroundStyle(ApeColor.textSecondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    NavigationLink {
+                        ArchivedWorkoutsView(repository: workoutRepository)
+                    } label: {
+                        ApeCard {
+                            HStack(spacing: ApeSpacing.md) {
+                                Image(systemName: "archivebox.fill")
+                                    .foregroundStyle(ApeColor.primary)
+                                    .frame(width: 36, height: 36)
+                                    .background(ApeColor.primarySoft)
+                                    .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
+                                VStack(alignment: .leading, spacing: ApeSpacing.xxs) {
+                                    Text("Archived Workouts").font(.apeHeadline)
+                                    Text("Restore workouts to your list")
+                                        .font(.apeCallout).foregroundStyle(ApeColor.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.apeCaption).foregroundStyle(ApeColor.textSecondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
 
                     ApeCard {
                         VStack(alignment: .leading, spacing: ApeSpacing.xs) {

@@ -40,7 +40,7 @@ struct ExercisesView: View {
                     .accessibilityLabel("Create exercise")
             }
             .sheet(isPresented: $isCreatingExercise) {
-                CreateExerciseView(viewModel: CreateExerciseViewModel(repository: repository)) {
+                CreateExerciseView(viewModel: CreateExerciseViewModel(repository: repository)) { _ in
                     viewModel.didCreateExercise()
                 }
             }
@@ -53,7 +53,11 @@ struct ExercisesView: View {
             LazyVStack(spacing: ApeSpacing.sm) {
                 ForEach(viewModel.exercises) { exercise in
                     NavigationLink {
-                        ExerciseDetailView(viewModel: ExerciseDetailViewModel(id: exercise.id, repository: repository))
+                        ExerciseDetailView(
+                            viewModel: ExerciseDetailViewModel(id: exercise.id, repository: repository),
+                            repository: repository,
+                            onChanged: viewModel.load
+                        )
                     } label: {
                         ApeCard {
                             HStack {
