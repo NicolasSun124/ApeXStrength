@@ -30,10 +30,17 @@ final class RestTimerCoordinator: ObservableObject {
     }
 
     nonisolated static func restoredEndDate(for sessionIdentifier: String) -> Date? {
-        let defaults = UserDefaults.standard
+        restoredEndDate(for: sessionIdentifier, defaults: .standard, now: Date())
+    }
+
+    nonisolated static func restoredEndDate(
+        for sessionIdentifier: String,
+        defaults: UserDefaults,
+        now: Date
+    ) -> Date? {
         guard defaults.string(forKey: sessionIdentifierKey) == sessionIdentifier,
               let endDate = defaults.object(forKey: endDateKey) as? Date,
-              endDate > Date() else {
+              endDate > now else {
             defaults.removeObject(forKey: endDateKey)
             defaults.removeObject(forKey: sessionIdentifierKey)
             return nil

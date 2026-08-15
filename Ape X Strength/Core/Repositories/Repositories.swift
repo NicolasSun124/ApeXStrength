@@ -60,7 +60,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
     func fetchWorkouts() throws -> [WorkoutListItem] {
         let request = WorkoutTemplate.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
-        request.predicate = NSPredicate(format: "isArchived == NO")
+        request.predicate = NSPredicate(format: "isArchived == NO AND user == %@", user)
 
         return try context.fetch(request).map { workout in
             let sessions = (workout.sessions as? Set<WorkoutSession> ?? [])
@@ -84,7 +84,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
     func fetchArchivedWorkouts() throws -> [WorkoutListItem] {
         let request = WorkoutTemplate.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
-        request.predicate = NSPredicate(format: "isArchived == YES")
+        request.predicate = NSPredicate(format: "isArchived == YES AND user == %@", user)
         return try context.fetch(request).map(workoutListItem)
     }
 
@@ -829,6 +829,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
     func fetchTags() throws -> [TagItem] {
         let request = Tag.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
+        request.predicate = NSPredicate(format: "owner == %@", user)
         var tags = try context.fetch(request)
         let existingNames = Set(tags.compactMap(\.name).map { $0.lowercased() })
         let missingNames = Self.defaultTags.filter { !existingNames.contains($0.lowercased()) }
@@ -839,6 +840,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 tag.clientUUID = UUID()
                 tag.name = name
                 tag.syncState = "synced"
+                tag.owner = user
                 return tag
             }
             tags.append(contentsOf: insertedTags)
@@ -862,7 +864,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
 
         let request = Tag.fetchRequest()
         request.fetchLimit = 1
-        request.predicate = NSPredicate(format: "name =[c] %@", name)
+        request.predicate = NSPredicate(format: "name =[c] %@ AND owner == %@", name, user)
         if let existing = try context.fetch(request).first {
             return TagItem(id: existing.objectID, name: existing.name ?? name)
         }
@@ -871,6 +873,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         tag.clientUUID = UUID()
         tag.name = name
         tag.syncState = "pendingCreate"
+        tag.owner = user
         do {
             try context.save()
         } catch {

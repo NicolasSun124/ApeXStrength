@@ -10,11 +10,22 @@ import SwiftUI
 @main
 struct Ape_X_StrengthApp: App {
     @UIApplicationDelegateAdaptor(NotificationDelegate.self) private var notificationDelegate
-    private let dependencies = AppDependencies.live
+    private let dependencies: AppDependencies
+    private let isUITesting: Bool
+
+    init() {
+        isUITesting = ProcessInfo.processInfo.arguments.contains("-ui-testing")
+        dependencies = isUITesting
+            ? AppDependencies.uiTesting
+            : AppDependencies.live
+    }
 
     var body: some Scene {
         WindowGroup {
-            RootTabView()
+            AuthenticationGateView(
+                authenticationService: dependencies.authentication,
+                skipAuthentication: isUITesting
+            )
                 .environment(\.appDependencies, dependencies)
                 .environment(\.managedObjectContext, dependencies.persistence.container.viewContext)
                 .tint(ApeColor.primary)

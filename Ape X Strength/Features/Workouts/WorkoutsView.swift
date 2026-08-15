@@ -112,6 +112,7 @@ struct WorkoutsView: View {
                         WorkoutCollectionCard(workout: workout)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("workout-card-\(workout.name)")
                 }
             }
             .padding(ApeSpacing.md)

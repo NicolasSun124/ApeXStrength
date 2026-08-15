@@ -28,6 +28,7 @@ struct RootTabView: View {
 
             SettingsView(
                 viewModel: SettingsViewModel(service: dependencies.settings),
+                authenticationService: dependencies.authentication,
                 exerciseRepository: dependencies.exercises,
                 workoutRepository: dependencies.workouts,
                 resetData: dependencies.persistence.resetUserData

@@ -5,11 +5,13 @@
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="email" attributeType="String"/>
         <attribute name="emailVerified" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="preferredWeightUnit" attributeType="String" defaultValueString="lbs"/>
         <attribute name="serverID" attributeType="UUID" usesScalarValueType="NO"/>
         <relationship name="customExercises" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Exercise" inverseName="owner" inverseEntity="Exercise"/>
         <relationship name="hiddenExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Exercise" inverseName="hiddenByUsers" inverseEntity="Exercise"/>
         <relationship name="sessions" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="WorkoutSession" inverseName="user" inverseEntity="WorkoutSession"/>
+        <relationship name="tags" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Tag" inverseName="owner" inverseEntity="Tag"/>
         <relationship name="workoutTemplates" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="WorkoutTemplate" inverseName="user" inverseEntity="WorkoutTemplate"/>
     </entity>
     <entity name="Muscle" representedClassName="Muscle" syncable="YES" codeGenerationType="class">
@@ -41,6 +43,7 @@
         <attribute name="name" attributeType="String"/>
         <attribute name="serverID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="syncState" attributeType="String" defaultValueString="synced"/>
+        <relationship name="owner" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="User" inverseName="tags" inverseEntity="User"/>
         <relationship name="workoutTemplates" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="WorkoutTemplate" inverseName="tags" inverseEntity="WorkoutTemplate"/>
     </entity>
     <entity name="WorkoutTemplate" representedClassName="WorkoutTemplate" syncable="YES" codeGenerationType="class">

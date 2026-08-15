@@ -3,13 +3,31 @@ import CoreData
 struct PersistenceController {
     static let shared = PersistenceController()
 
+    private static let managedObjectModel: NSManagedObjectModel = {
+        guard let url = Bundle.main.url(forResource: "Ape_X_Strength", withExtension: "momd"),
+              let model = NSManagedObjectModel(contentsOf: url) else {
+            preconditionFailure("Unable to load Ape_X_Strength.momd")
+        }
+        return model
+    }()
+
     let container: NSPersistentContainer
 
-    init(inMemory: Bool = false) {
-        container = NSPersistentContainer(name: "Ape_X_Strength")
+    init(inMemory: Bool = false, storeURL: URL? = nil) {
+        container = NSPersistentContainer(
+            name: "Ape_X_Strength",
+            managedObjectModel: Self.managedObjectModel
+        )
 
         if inMemory {
             container.persistentStoreDescriptions.first?.url = URL(fileURLWithPath: "/dev/null")
+        } else if let storeURL {
+            container.persistentStoreDescriptions.first?.url = storeURL
+        }
+
+        container.persistentStoreDescriptions.forEach { description in
+            description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+            description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
         }
 
         container.loadPersistentStores { _, error in
@@ -24,22 +42,55 @@ struct PersistenceController {
     }
 
     @MainActor
-    func initializeTemporaryUser() throws -> User {
+    func initializeUser(authenticatedUser: AuthenticatedUser? = nil) throws -> User {
         let context = container.viewContext
         let request = User.fetchRequest()
         request.fetchLimit = 1
         if let user = try context.fetch(request).first {
+            if let authenticatedUser {
+                try synchronize(authenticatedUser, with: user)
+            }
+            try claimLegacyTags(for: user)
             return user
         }
 
         let user = User(context: context)
         user.serverID = UUID()
         user.createdAt = Date()
-        user.email = "local@apexstrength.app"
-        user.emailVerified = false
+        user.email = authenticatedUser?.email ?? "local@apexstrength.app"
+        user.name = authenticatedUser?.name
+        user.emailVerified = authenticatedUser?.isEmailVerified ?? false
         user.preferredWeightUnit = "lbs"
         try context.save()
         return user
+    }
+
+    @MainActor
+    private func claimLegacyTags(for user: User) throws {
+        let request = Tag.fetchRequest()
+        request.predicate = NSPredicate(format: "owner == nil")
+        let tags = try container.viewContext.fetch(request)
+        guard !tags.isEmpty else { return }
+        tags.forEach { $0.owner = user }
+        try container.viewContext.save()
+    }
+
+    @MainActor
+    func synchronize(_ authenticatedUser: AuthenticatedUser, with user: User) throws {
+        user.email = authenticatedUser.email
+        user.name = authenticatedUser.name
+        user.emailVerified = authenticatedUser.isEmailVerified
+        if user.serverID == nil { user.serverID = UUID() }
+        if user.createdAt == nil { user.createdAt = Date() }
+        if user.preferredWeightUnit == nil { user.preferredWeightUnit = "lbs" }
+        if user.managedObjectContext?.hasChanges == true {
+            try user.managedObjectContext?.save()
+        }
+    }
+
+    @MainActor
+    func initializeTemporaryUser() throws -> User {
+        try initializeUser()
     }
 
     @MainActor
@@ -62,7 +113,9 @@ struct PersistenceController {
         exerciseRequest.predicate = NSPredicate(format: "owner == %@", user)
         try context.fetch(exerciseRequest).forEach(context.delete)
 
-        try context.fetch(Tag.fetchRequest()).forEach(context.delete)
+        let tagRequest = Tag.fetchRequest()
+        tagRequest.predicate = NSPredicate(format: "owner == %@", user)
+        try context.fetch(tagRequest).forEach(context.delete)
         user.hiddenExercises = nil
 
         if context.hasChanges {
@@ -78,6 +131,7 @@ struct PersistenceController {
         let user = User(context: context)
         user.serverID = UUID()
         user.email = "preview@apexstrength.app"
+        user.name = "Preview Athlete"
         user.createdAt = Date()
         user.preferredWeightUnit = "lbs"
 

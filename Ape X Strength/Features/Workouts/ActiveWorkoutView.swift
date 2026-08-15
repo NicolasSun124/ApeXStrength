@@ -194,11 +194,18 @@ struct ActiveWorkoutView: View {
 
     private var sessionControls: some View {
         HStack(spacing: ApeSpacing.sm) {
-            TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                Label(elapsedTime(at: context.date), systemImage: "timer")
+            if ProcessInfo.processInfo.environment["APE_X_UI_TESTING"] == "1" {
+                Label(elapsedTime(at: startedAt), systemImage: "timer")
                     .font(.apeHeadline.monospacedDigit())
                     .foregroundStyle(ApeColor.textPrimary)
-                    .accessibilityLabel("Workout time \(elapsedTime(at: context.date))")
+                    .accessibilityLabel("Workout time 00:00:00")
+            } else {
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Label(elapsedTime(at: context.date), systemImage: "timer")
+                        .font(.apeHeadline.monospacedDigit())
+                        .foregroundStyle(ApeColor.textPrimary)
+                        .accessibilityLabel("Workout time \(elapsedTime(at: context.date))")
+                }
             }
 
             if let restTimerEnd {
@@ -518,7 +525,7 @@ struct ActiveWorkoutView: View {
         isRestTimerPresented = false
     }
 
-    fileprivate static func timerText(seconds: Int) -> String {
+    static func timerText(seconds: Int) -> String {
         String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @StateObject private var viewModel: SettingsViewModel
+    private let authenticationService: any EmailAuthenticationService
     private let exerciseRepository: any ExerciseRepository
     private let workoutRepository: any WorkoutRepository
     private let resetData: () throws -> Void
@@ -9,11 +10,13 @@ struct SettingsView: View {
 
     init(
         viewModel: @autoclosure @escaping () -> SettingsViewModel,
+        authenticationService: any EmailAuthenticationService,
         exerciseRepository: any ExerciseRepository,
         workoutRepository: any WorkoutRepository,
         resetData: @escaping () throws -> Void
     ) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.authenticationService = authenticationService
         self.exerciseRepository = exerciseRepository
         self.workoutRepository = workoutRepository
         self.resetData = resetData
@@ -36,20 +39,20 @@ struct SettingsView: View {
                                     .clipShape(Circle())
 
                                 VStack(alignment: .leading, spacing: ApeSpacing.xxs) {
-                                    Text("Ape Athlete")
+                                    Text(accountName)
                                         .font(.apeHeadline)
-                                    Text("local@apexstrength.app")
+                                    Text(accountEmail)
                                         .font(.apeCallout)
                                         .foregroundStyle(ApeColor.textSecondary)
-                                    Text("Local profile")
+                                    Text(accountStatus)
                                         .font(.apeCaption)
-                                        .foregroundStyle(ApeColor.primary)
+                                        .foregroundStyle(accountStatusColor)
                                 }
 
                                 Spacer()
                             }
 
-                            Text("Profile editing and account sign-in are coming soon.")
+                            Text("Your account details come from your verified sign-in.")
                                 .font(.apeCallout)
                                 .foregroundStyle(ApeColor.textSecondary)
                         }
@@ -194,6 +197,26 @@ struct SettingsView: View {
                 .presentationDragIndicator(.visible)
             }
         }
+    }
+
+    private var accountName: String {
+        authenticationService.authenticatedUser?.name ?? "Ape Athlete"
+    }
+
+    private var accountEmail: String {
+        authenticationService.authenticatedUser?.email ?? "No email available"
+    }
+
+    private var accountStatus: String {
+        authenticationService.authenticatedUser?.isEmailVerified == true
+            ? "Verified email"
+            : "Email not verified"
+    }
+
+    private var accountStatusColor: Color {
+        authenticationService.authenticatedUser?.isEmailVerified == true
+            ? ApeColor.success
+            : ApeColor.warning
     }
 }
 
