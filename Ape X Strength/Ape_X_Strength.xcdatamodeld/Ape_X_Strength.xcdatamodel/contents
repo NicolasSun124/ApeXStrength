@@ -8,6 +8,8 @@
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="preferredWeightUnit" attributeType="String" defaultValueString="lbs"/>
         <attribute name="serverID" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="syncCursor" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="syncProtocolVersion" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="customExercises" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Exercise" inverseName="owner" inverseEntity="Exercise"/>
         <relationship name="hiddenExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Exercise" inverseName="hiddenByUsers" inverseEntity="Exercise"/>
         <relationship name="sessions" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="WorkoutSession" inverseName="user" inverseEntity="WorkoutSession"/>
@@ -129,6 +131,11 @@
         <attribute name="weight" optional="YES" attributeType="Decimal" defaultValueString="0"/>
         <relationship name="sessionExercise" maxCount="1" deletionRule="Nullify" destinationEntity="SessionExercise" inverseName="sets" inverseEntity="SessionExercise"/>
     </entity>
+    <entity name="SyncTombstone" representedClassName="SyncTombstone" syncable="YES" codeGenerationType="class">
+        <attribute name="clientUUID" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="entityType" attributeType="String"/>
+    </entity>
     <elements>
         <element name="User" positionX="-720" positionY="-90" width="128" height="149"/>
         <element name="Muscle" positionX="-720" positionY="180" width="128" height="104"/>
@@ -140,5 +147,6 @@
         <element name="WorkoutSession" positionX="-180" positionY="210" width="128" height="299"/>
         <element name="SessionExercise" positionX="90" positionY="210" width="128" height="149"/>
         <element name="SessionSet" positionX="360" positionY="210" width="128" height="284"/>
+        <element name="SyncTombstone" positionX="630" positionY="210" width="128" height="89"/>
     </elements>
 </model>

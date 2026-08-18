@@ -11,6 +11,8 @@ enum EmailAuthenticationError: LocalizedError {
     case weakPassword
     case invalidCode
     case invalidName
+    case invalidResponse
+    case server(String)
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +24,10 @@ enum EmailAuthenticationError: LocalizedError {
             return "That verification code is incorrect."
         case .invalidName:
             return "Enter your name to continue."
+        case .invalidResponse:
+            return "The authentication server returned an invalid response."
+        case .server(let message):
+            return message
         }
     }
 }

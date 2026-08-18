@@ -3,6 +3,15 @@ import Foundation
 protocol SettingsService {
     func load() -> AppSettings
     func save(_ settings: AppSettings)
+    var needsSync: Bool { get }
+    func markSynced()
+    func applyRemote(_ settings: AppSettings)
+}
+
+extension SettingsService {
+    var needsSync: Bool { false }
+    func markSynced() { }
+    func applyRemote(_ settings: AppSettings) { save(settings) }
 }
 
 final class UserDefaultsSettingsService: SettingsService {
@@ -10,12 +19,15 @@ final class UserDefaultsSettingsService: SettingsService {
         static let weightUnit = "settings.weightUnit"
         static let distanceUnit = "settings.distanceUnit"
         static let restNotifications = "settings.restTimerNotifications"
+        static let needsSync = "settings.needsSync"
     }
 
     private let defaults: UserDefaults
+    private let onSave: (() -> Void)?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, onSave: (() -> Void)? = nil) {
         self.defaults = defaults
+        self.onSave = onSave
     }
 
     func load() -> AppSettings {
@@ -32,9 +44,21 @@ final class UserDefaultsSettingsService: SettingsService {
         defaults.set(settings.weightUnit, forKey: Key.weightUnit)
         defaults.set(settings.distanceUnit, forKey: Key.distanceUnit)
         defaults.set(settings.restTimerNotificationsEnabled, forKey: Key.restNotifications)
+        defaults.set(true, forKey: Key.needsSync)
+        onSave?()
+    }
+
+    var needsSync: Bool { defaults.bool(forKey: Key.needsSync) }
+    func markSynced() { defaults.set(false, forKey: Key.needsSync) }
+    func applyRemote(_ settings: AppSettings) {
+        defaults.set(settings.weightUnit, forKey: Key.weightUnit)
+        defaults.set(settings.distanceUnit, forKey: Key.distanceUnit)
+        defaults.set(settings.restTimerNotificationsEnabled, forKey: Key.restNotifications)
+        defaults.set(false, forKey: Key.needsSync)
     }
 }
 
+@MainActor
 protocol SyncService {
     func syncIfNeeded() async throws
 }

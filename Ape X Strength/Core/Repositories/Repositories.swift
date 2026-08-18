@@ -48,11 +48,13 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
     private let context: NSManagedObjectContext
     private let settings: any SettingsService
     private let user: User
+    private let onSyncRequested: () -> Void
 
-    init(context: NSManagedObjectContext, settings: any SettingsService, user: User) {
+    init(context: NSManagedObjectContext, settings: any SettingsService, user: User, onSyncRequested: @escaping () -> Void = {}) {
         self.context = context
         self.settings = settings
         self.user = user
+        self.onSyncRequested = onSyncRequested
     }
 
     private var selectedWeightUnit: WeightUnit { WeightUnit(setting: settings.load().weightUnit) }
@@ -272,6 +274,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         workout.syncState = "pendingUpdate"
         do {
             try context.save()
+            onSyncRequested()
         } catch {
             context.rollback()
             throw error
@@ -288,6 +291,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         workout.syncState = "pendingUpdate"
         do {
             try context.save()
+            onSyncRequested()
         } catch {
             context.rollback()
             throw error
@@ -301,6 +305,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             throw WorkoutRepositoryError.exerciseNotFound
         }
         let removed = items.remove(at: index)
+        createTombstone(entity: "template_exercise", uuid: removed.clientUUID)
         context.delete(removed)
         apply(items, to: workout)
         try saveWorkoutChanges()
@@ -376,7 +381,9 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         guard let index = sets.firstIndex(where: { Int($0.setNumber) == number }) else {
             throw WorkoutRepositoryError.exerciseNotFound
         }
-        context.delete(sets.remove(at: index))
+        let removed = sets.remove(at: index)
+        createTombstone(entity: "template_set", uuid: removed.clientUUID)
+        context.delete(removed)
         for (index, set) in sets.enumerated() {
             set.setNumber = Int32(index + 1)
             set.syncState = "pendingUpdate"
@@ -398,6 +405,13 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             difficultyType: configuration.difficultyType,
             targetRestSeconds: Int(exercise.targetRestSeconds)
         )
+    }
+
+    private func createTombstone(entity: String, uuid: UUID) {
+        let tombstone = SyncTombstone(context: context)
+        tombstone.entityType = entity
+        tombstone.clientUUID = uuid
+        tombstone.createdAt = Date()
     }
 
     private func editableWorkout(id: NSManagedObjectID) throws -> WorkoutTemplate {
@@ -426,6 +440,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
     private func saveWorkoutChanges() throws {
         do {
             try context.save()
+            onSyncRequested()
         } catch {
             context.rollback()
             throw error
@@ -516,6 +531,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         workout.updatedAt = input.endedAt
         do {
             try context.save()
+            onSyncRequested()
         } catch {
             context.rollback()
             throw error
@@ -937,6 +953,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
 
         do {
             try context.save()
+            onSyncRequested()
         } catch {
             context.rollback()
             throw error
@@ -961,7 +978,13 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         let workout = try editableWorkout(id: id)
 
         let oldExercises = workout.templateExercises?.array as? [TemplateExercise] ?? []
-        oldExercises.forEach(context.delete)
+        oldExercises.forEach { item in
+            (item.plannedSets?.array as? [TemplatePlannedSet] ?? []).forEach {
+                createTombstone(entity: "template_set", uuid: $0.clientUUID)
+            }
+            createTombstone(entity: "template_exercise", uuid: item.clientUUID)
+            context.delete(item)
+        }
 
         let templateExercises = try input.exerciseIDs.enumerated().map { position, exerciseID in
             guard let exercise = try context.existingObject(with: exerciseID) as? Exercise else {
@@ -1088,10 +1111,12 @@ enum WorkoutRepositoryError: LocalizedError {
 final class CoreDataExerciseRepository: ExerciseRepository {
     private let context: NSManagedObjectContext
     private let user: User
+    private let onSyncRequested: () -> Void
 
-    init(context: NSManagedObjectContext, user: User) {
+    init(context: NSManagedObjectContext, user: User, onSyncRequested: @escaping () -> Void = {}) {
         self.context = context
         self.user = user
+        self.onSyncRequested = onSyncRequested
     }
 
     func fetchExercises() throws -> [ExerciseListItem] {
@@ -1215,6 +1240,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
         }) as NSSet
         do {
             try context.save()
+            onSyncRequested()
         } catch {
             context.delete(exercise)
             throw error
@@ -1251,6 +1277,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
         try apply(input, to: exercise)
         do {
             try context.save()
+            onSyncRequested()
         } catch {
             context.rollback()
             throw error
@@ -1316,7 +1343,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
     }
 
     private func saveChanges() throws {
-        do { try context.save() } catch { context.rollback(); throw error }
+        do { try context.save(); onSyncRequested() } catch { context.rollback(); throw error }
     }
 
     private func muscleItem(_ muscle: Muscle) -> MuscleItem {
