@@ -407,7 +407,8 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         )
     }
 
-    private func createTombstone(entity: String, uuid: UUID) {
+    private func createTombstone(entity: String, uuid: UUID?) {
+        guard let uuid else { return }
         let tombstone = SyncTombstone(context: context)
         tombstone.entityType = entity
         tombstone.clientUUID = uuid

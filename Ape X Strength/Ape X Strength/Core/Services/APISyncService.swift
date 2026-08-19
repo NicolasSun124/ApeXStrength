@@ -98,62 +98,70 @@ final class APISyncService: SyncService {
                 "rest_timer_notifications_enabled": value.restTimerNotificationsEnabled])
         }
         for item in try fetch(Exercise.self, predicate: pending) {
-            add("exercise", id(item.clientUUID, item.serverID), item.syncState,
-                ["name": item.name ?? "", "created_at": iso(item.createdAt), "is_archived": item.isArchived,
-                 "tracking_type": item.trackingType ?? "", "target_rest_seconds": item.targetRestSeconds,
-                 "primary_muscle_id": item.primaryMuscle?.serverID.uuidString ?? "",
-                 "primary_muscle_name": item.primaryMuscle?.name ?? "Unknown", "primary_muscle_color": item.primaryMuscle?.colorHex ?? "8AC5FF",
-                 "secondary_muscle_names": (item.secondaryMuscles as? Set<Muscle> ?? []).compactMap(\.name).sorted(),
-                 "secondary_muscle_ids": (item.secondaryMuscles as? Set<Muscle> ?? []).map { $0.serverID.uuidString }.sorted()])
+            let secondaryMuscles = item.secondaryMuscles as? Set<Muscle> ?? []
+            let data: [String: Any] = [
+                "name": item.name ?? "",
+                "created_at": iso(item.createdAt),
+                "is_archived": item.isArchived,
+                "tracking_type": item.trackingType ?? "",
+                "target_rest_seconds": item.targetRestSeconds,
+                "primary_muscle_id": item.primaryMuscle?.serverID?.uuidString ?? "",
+                "primary_muscle_name": item.primaryMuscle?.name ?? "Unknown",
+                "primary_muscle_color": item.primaryMuscle?.colorHex ?? "8AC5FF",
+                "secondary_muscle_names": secondaryMuscles.compactMap(\.name).sorted(),
+                "secondary_muscle_ids": secondaryMuscles.compactMap { $0.serverID?.uuidString }.sorted()
+            ]
+            add("exercise", id(item.clientUUID, item.serverID), item.syncState, data)
         }
         for item in try fetch(Tag.self, predicate: pending) {
             add("tag", id(item.clientUUID, item.serverID), item.syncState, ["name": item.name ?? ""])
         }
         for item in try fetch(WorkoutTemplate.self, predicate: pending) {
-            add("workout", item.clientUUID.uuidString, item.syncState,
+            add("workout", id(item.clientUUID, item.serverID), item.syncState,
                 ["name": item.name ?? "", "created_at": iso(item.createdAt), "updated_at": iso(item.updatedAt),
                  "is_archived": item.isArchived, "tag_ids": (item.tags as? Set<Tag> ?? []).map { id($0.clientUUID, $0.serverID) }.sorted()])
         }
         for item in try fetch(TemplateExercise.self, predicate: pending) {
-            add("template_exercise", item.clientUUID.uuidString, item.syncState,
-                ["workout_id": item.workoutTemplate?.clientUUID.uuidString ?? "", "exercise_id": id(item.exercise?.clientUUID, item.exercise?.serverID),
+            add("template_exercise", id(item.clientUUID, item.serverID), item.syncState,
+                ["workout_id": id(item.workoutTemplate?.clientUUID, item.workoutTemplate?.serverID), "exercise_id": id(item.exercise?.clientUUID, item.exercise?.serverID),
                  "position": item.position, "alternate_exercise_ids": (item.alternateExercises as? Set<Exercise> ?? []).map { id($0.clientUUID, $0.serverID) }.sorted()])
         }
         for item in try fetch(TemplatePlannedSet.self, predicate: pending) {
-            add("template_set", item.clientUUID.uuidString, item.syncState,
-                ["template_exercise_id": item.templateExercise?.clientUUID.uuidString ?? "", "number": item.setNumber, "warmup": item.isWarmup,
+            add("template_set", id(item.clientUUID, item.serverID), item.syncState,
+                ["template_exercise_id": id(item.templateExercise?.clientUUID, item.templateExercise?.serverID), "number": item.setNumber, "warmup": item.isWarmup,
                  "reps": value(item.plannedReps), "time_seconds": value(item.plannedTimeSeconds), "distance": decimal(item.plannedDistance), "weight": decimal(item.plannedWeight)])
         }
-        for item in try fetch(WorkoutSession.self, predicate: pending) { add("workout_session", item.clientUUID.uuidString, item.syncState, sessionJSON(item)) }
+        for item in try fetch(WorkoutSession.self, predicate: pending) { add("workout_session", id(item.clientUUID, item.serverID), item.syncState, sessionJSON(item)) }
         for item in try fetch(SessionExercise.self, predicate: pending) {
-            add("session_exercise", item.clientUUID.uuidString, item.syncState,
-                ["session_id": item.session?.clientUUID.uuidString ?? "", "exercise_id": id(item.exercise?.clientUUID, item.exercise?.serverID), "position": item.position,
+            add("session_exercise", id(item.clientUUID, item.serverID), item.syncState,
+                ["session_id": id(item.session?.clientUUID, item.session?.serverID), "exercise_id": id(item.exercise?.clientUUID, item.exercise?.serverID), "position": item.position,
                  "name": item.snapshotExerciseName ?? "", "tracking_type": item.snapshotTrackingType ?? "", "difficulty_type": item.snapshotDifficultyType ?? "",
                  "primary_muscle_name": item.snapshotPrimaryMuscleName ?? "", "primary_muscle_color": item.snapshotPrimaryMuscleColorHex ?? "",
                  "target_rest_seconds": item.snapshotTargetRestSeconds ?? NSNull()])
         }
         for item in try fetch(SessionSet.self, predicate: pending) {
-            add("session_set", item.clientUUID.uuidString, item.syncState,
-                ["session_exercise_id": item.sessionExercise?.clientUUID.uuidString ?? "", "number": item.setNumber, "completed": item.completed,
+            add("session_set", id(item.clientUUID, item.serverID), item.syncState,
+                ["session_exercise_id": id(item.sessionExercise?.clientUUID, item.sessionExercise?.serverID), "number": item.setNumber, "completed": item.completed,
                  "completed_at": item.completedAt.map(iso) ?? NSNull(), "warmup": item.isWarmup, "reps": value(item.reps),
                  "time_seconds": value(item.timeSeconds), "distance": decimal(item.distance), "weight": decimal(item.weight), "pace": value(item.pace)])
         }
         for item in try fetch(SyncTombstone.self, predicate: NSPredicate(value: true)) {
-            output.append(["entity": item.entityType, "client_uuid": item.clientUUID.uuidString, "operation": "delete", "data": [:]])
+            guard let clientUUID = item.clientUUID, let entityType = item.entityType else { continue }
+            output.append(["entity": entityType, "client_uuid": clientUUID.uuidString, "operation": "delete", "data": [:]])
         }
         return output
     }
 
     private func workoutJSON(_ workout: WorkoutTemplate) -> [String: Any] {
         let items = (workout.templateExercises?.array as? [TemplateExercise] ?? []).sorted { $0.position < $1.position }
-        return ["id": workout.clientUUID.uuidString, "name": workout.name ?? "", "created_at": iso(workout.createdAt),
+        return ["id": id(workout.clientUUID, workout.serverID), "name": workout.name ?? "", "created_at": iso(workout.createdAt),
                 "updated_at": iso(workout.updatedAt), "is_archived": workout.isArchived,
                 "tag_ids": (workout.tags as? Set<Tag> ?? []).map { id($0.clientUUID, $0.serverID) }.sorted(),
                 "exercises": items.map { item in
-                    ["id": item.clientUUID.uuidString, "exercise_id": id(item.exercise?.clientUUID, item.exercise?.serverID), "position": item.position,
+                    ["id": id(item.clientUUID, item.serverID), "exercise_id": id(item.exercise?.clientUUID, item.exercise?.serverID), "position": item.position,
                      "alternate_exercise_ids": (item.alternateExercises as? Set<Exercise> ?? []).map { id($0.clientUUID, $0.serverID) }.sorted(),
                      "sets": (item.plannedSets?.array as? [TemplatePlannedSet] ?? []).map { set in
-                        ["id": set.clientUUID.uuidString, "number": set.setNumber, "warmup": set.isWarmup,
+                        ["id": id(set.clientUUID, set.serverID), "number": set.setNumber, "warmup": set.isWarmup,
                          "reps": value(set.plannedReps), "time_seconds": value(set.plannedTimeSeconds),
                          "distance": decimal(set.plannedDistance), "weight": decimal(set.plannedWeight)] as [String: Any]
                      }] as [String: Any]
@@ -161,7 +169,7 @@ final class APISyncService: SyncService {
     }
 
     private func sessionJSON(_ session: WorkoutSession) -> [String: Any] {
-        ["id": session.clientUUID.uuidString, "workout_id": session.workoutTemplate.map { $0.clientUUID.uuidString } ?? NSNull(),
+        ["id": id(session.clientUUID, session.serverID), "workout_id": session.workoutTemplate.map { id($0.clientUUID, $0.serverID) } ?? NSNull(),
          "started_at": iso(session.startedAt), "ended_at": session.endedAt.map(iso) ?? NSNull(), "duration_seconds": session.durationSeconds,
          "rating": session.rating, "note": session.note ?? NSNull(), "percent_completed": session.percentCompleted,
          "volume_weight": decimal(session.volumeWeight), "average_rest_seconds": value(session.averageRestSeconds),

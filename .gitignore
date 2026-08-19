@@ -1,0 +1,50 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific settings and UI state
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Xcode build products
+build/
+DerivedData/
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager local state and build output
+.build/
+.swiftpm/
+
+# CocoaPods and Carthage generated dependencies
+Pods/
+Carthage/Build/
+
+# Fastlane generated reports and screenshots
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Local environment and temporary files
+.env
+.env.*
+!.env.example
+*.swp
+*~
+
+# Pytest / Flask
+.env
+.pytest_cache/
+.venv/
+__pycache__/
+*.py[cod]
+instance/
+.idea/
+
+# Other documents
+ARCHITECTURE_AND_DESIGN_PRINCIPLES.md
+FEATURE_LEARNING_GUIDE.md
+REVIEW_MATERIAL.pages
