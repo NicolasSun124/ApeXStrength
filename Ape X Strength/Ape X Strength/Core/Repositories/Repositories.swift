@@ -163,6 +163,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         let occurrences = (session.sessionExercises?.array as? [SessionExercise] ?? [])
             .sorted { $0.position < $1.position }
         var completedSets: [NSManagedObjectID: Set<Int>] = [:]
+        var completionDates: [NSManagedObjectID: [Int: Date]] = [:]
 
         let exercises = occurrences.compactMap { occurrence -> WorkoutPreviewExercise? in
             guard let exercise = occurrence.exercise else { return nil }
@@ -170,6 +171,10 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             let sets = (occurrence.sets?.array as? [SessionSet] ?? [])
                 .sorted { $0.setNumber < $1.setNumber }
             completedSets[exercise.objectID] = Set(sets.filter(\.completed).map { Int($0.setNumber) })
+            completionDates[exercise.objectID] = Dictionary(uniqueKeysWithValues: sets.compactMap { set in
+                guard set.completed, let completedAt = set.completedAt else { return nil }
+                return (Int(set.setNumber), completedAt)
+            })
             let templateItem = templateItems.first { $0.exercise == exercise }
 
             return WorkoutPreviewExercise(
@@ -204,7 +209,8 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 exercises: exercises
             ),
             startedAt: session.startedAt ?? Date(),
-            completedSetNumbersByExerciseID: completedSets
+            completedSetNumbersByExerciseID: completedSets,
+            completedAtByExerciseIDAndSetNumber: completionDates
         )
     }
 
@@ -235,7 +241,8 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                                 timeSeconds: set.timeSeconds,
                                 distance: set.distance as Decimal? ?? 0,
                                 weight: selectedWeightUnit.displayed(fromPounds: set.weight as Decimal? ?? 0),
-                                completed: set.completed
+                                completed: set.completed,
+                                completedAt: set.completedAt
                             )
                         }
                     return WorkoutSessionHistoryExercise(
@@ -468,6 +475,13 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             throw WorkoutRepositoryError.workoutNotFound
         }
 
+        let activeRequest = WorkoutSession.fetchRequest()
+        activeRequest.fetchLimit = 1
+        activeRequest.predicate = NSPredicate(format: "endedAt == nil AND user == %@", user)
+        if try !context.fetch(activeRequest).isEmpty {
+            throw WorkoutRepositoryError.activeSessionAlreadyExists
+        }
+
         let session = WorkoutSession(context: context)
         session.clientUUID = UUID()
         session.startedAt = startedAt
@@ -575,6 +589,9 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 && existingExercises[position].exercise == exercise
                 ? existingExercises[position]
                 : nil
+            let previousSetsByNumber = Dictionary(uniqueKeysWithValues:
+                (previousOccurrence?.sets?.array as? [SessionSet] ?? []).map { (Int($0.setNumber), $0) }
+            )
             let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
             sessionExercise.snapshotExerciseName = previousOccurrence?.snapshotExerciseName
                 ?? exercise.name
@@ -602,7 +619,9 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 let weightInPounds = selectedWeightUnit.pounds(fromDisplayed: inputSet.weight)
                 set.weight = NSDecimalNumber(decimal: weightInPounds)
                 set.completed = inputSet.completed
-                set.completedAt = inputSet.completed ? completedAt : nil
+                set.completedAt = inputSet.completed
+                    ? inputSet.completedAt ?? previousSetsByNumber[inputSet.number]?.completedAt ?? completedAt
+                    : nil
                 set.isWarmup = false
                 set.syncState = "pendingCreate"
                 set.sessionExercise = sessionExercise
@@ -1104,6 +1123,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
 
 enum WorkoutRepositoryError: LocalizedError {
     case nameRequired, exerciseRequired, exerciseNotFound, tagNameRequired, workoutNotFound, sessionNotFound
+    case activeSessionAlreadyExists
 
     var errorDescription: String? {
         switch self {
@@ -1113,6 +1133,7 @@ enum WorkoutRepositoryError: LocalizedError {
         case .tagNameRequired: "Enter a tag name."
         case .workoutNotFound: "This workout is no longer available."
         case .sessionNotFound: "This workout session is no longer available."
+        case .activeSessionAlreadyExists: "Finish or discard your active workout before starting another session."
         }
     }
 }

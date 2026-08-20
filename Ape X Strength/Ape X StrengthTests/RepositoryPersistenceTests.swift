@@ -70,23 +70,78 @@ final class RepositoryPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testDraftRecoveryUsesNewestUnfinishedSessionOnly() throws {
+    func testStartingASecondActiveSessionIsRejected() throws {
         let fixture = try RepositoryFixture()
         let exercise = try fixture.makeExercise()
         let workout = try fixture.makeWorkout(exercises: [exercise])
-        _ = try fixture.workouts.startSession(
+        let first = try fixture.workouts.startSession(
             workoutID: workout.objectID,
             startedAt: Date(timeIntervalSince1970: 100),
             exercises: [fixture.input(exercise, reps: 1)]
         )
-        let newest = try fixture.workouts.startSession(
+        XCTAssertThrowsError(try fixture.workouts.startSession(
             workoutID: workout.objectID,
             startedAt: Date(timeIntervalSince1970: 200),
             exercises: [fixture.input(exercise, reps: 2)]
+        )) { error in
+            guard case WorkoutRepositoryError.activeSessionAlreadyExists = error else {
+                return XCTFail("Expected activeSessionAlreadyExists, got \(error)")
+            }
+        }
+        XCTAssertEqual(try fixture.workouts.fetchActiveSessionDraft()?.id, first)
+    }
+
+    @MainActor
+    func testSetCompletionTimestampSurvivesAutosaveAndFinish() throws {
+        let fixture = try RepositoryFixture()
+        let exercise = try fixture.makeExercise()
+        let workout = try fixture.makeWorkout(exercises: [exercise])
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        let completed = started.addingTimeInterval(125)
+        let input = CompletedSessionExercise(exerciseID: exercise.objectID, sets: [CompletedSessionSet(
+            number: 1, reps: 8, timeSeconds: 0, distance: 0, weight: 100,
+            completed: true, completedAt: completed
+        )])
+        let id = try fixture.workouts.startSession(
+            workoutID: workout.objectID, startedAt: started,
+            exercises: [fixture.input(exercise, completed: false)]
         )
 
-        XCTAssertEqual(try fixture.workouts.fetchActiveSessionDraft()?.id, newest)
-        XCTAssertEqual(try fixture.workouts.fetchActiveSessionDraft()?.workout.exercises.first?.sets.first?.reps, 2)
+        try fixture.workouts.updateActiveSession(id: id, exercises: [input])
+        XCTAssertEqual(try fixture.workouts.fetchActiveSessionDraft()?
+            .completedAtByExerciseIDAndSetNumber[exercise.objectID]?[1], completed)
+
+        let ended = started.addingTimeInterval(600)
+        try fixture.workouts.saveCompletedSession(CompletedWorkoutSession(
+            id: id, workoutID: workout.objectID, startedAt: started, endedAt: ended,
+            rating: 4, note: nil, exercises: [input]
+        ))
+        let session = try XCTUnwrap(fixture.context.existingObject(with: id) as? WorkoutSession)
+        let occurrence = try XCTUnwrap(session.sessionExercises?.firstObject as? SessionExercise)
+        let savedSet = try XCTUnwrap(occurrence.sets?.firstObject as? SessionSet)
+        XCTAssertEqual(savedSet.completedAt, completed)
+        XCTAssertNotEqual(savedSet.completedAt, ended)
+    }
+
+    @MainActor
+    func testHidingGlobalExerciseOnlyAffectsCurrentUser() throws {
+        let fixture = try RepositoryFixture()
+        let otherUser = User(context: fixture.context)
+        otherUser.serverID = UUID()
+        otherUser.email = "other@example.com"
+        let global = Exercise(context: fixture.context)
+        global.name = "Global Squat"
+        global.createdAt = Date()
+        global.trackingType = "reps|weighted"
+        global.primaryMuscle = fixture.muscle
+        try fixture.context.save()
+        let otherRepository = CoreDataExerciseRepository(context: fixture.context, user: otherUser)
+
+        try fixture.exercises.archiveExercise(id: global.objectID)
+
+        XCTAssertFalse(try fixture.exercises.fetchExercises().contains { $0.id == global.objectID })
+        XCTAssertTrue(try fixture.exercises.fetchArchivedExercises().contains { $0.id == global.objectID })
+        XCTAssertTrue(try otherRepository.fetchExercises().contains { $0.id == global.objectID })
     }
 
     @MainActor

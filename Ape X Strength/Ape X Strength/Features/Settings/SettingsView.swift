@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import UserNotifications
 
 struct SettingsView: View {
     @StateObject private var viewModel: SettingsViewModel
@@ -12,6 +14,8 @@ struct SettingsView: View {
     @State private var isShowingSyncConfirmation = false
     @State private var isShowingSyncError = false
     @State private var isShowingResetConfirmation = false
+    @State private var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
+    @Environment(\.scenePhase) private var scenePhase
 
     init(
         viewModel: @autoclosure @escaping () -> SettingsViewModel,
@@ -119,14 +123,28 @@ struct SettingsView: View {
                     }
 
                     ApeCard {
-                        Toggle(isOn: $viewModel.settings.restTimerNotificationsEnabled) {
-                            VStack(alignment: .leading, spacing: ApeSpacing.xxs) {
-                                Text("Rest timer alerts").font(.apeHeadline)
-                                Text("Notify me when rest is over")
-                                    .font(.apeCallout).foregroundStyle(ApeColor.textSecondary)
+                        VStack(alignment: .leading, spacing: ApeSpacing.sm) {
+                            Toggle(isOn: $viewModel.settings.restTimerNotificationsEnabled) {
+                                VStack(alignment: .leading, spacing: ApeSpacing.xxs) {
+                                    Text("Rest timer alerts").font(.apeHeadline)
+                                    Text("Notify me when rest is over")
+                                        .font(.apeCallout).foregroundStyle(ApeColor.textSecondary)
+                                }
+                            }
+                            .tint(ApeColor.primary)
+
+                            if notificationAuthorizationStatus == .denied {
+                                VStack(alignment: .leading, spacing: ApeSpacing.xs) {
+                                    Label("Notifications are turned off for Ape X Strength.", systemImage: "bell.slash.fill")
+                                        .font(.apeCallout)
+                                        .foregroundStyle(ApeColor.textSecondary)
+                                    Button("Open Notification Settings") { openNotificationSettings() }
+                                        .font(.apeHeadline)
+                                        .foregroundStyle(ApeColor.primary)
+                                }
+                                .accessibilityIdentifier("notificationDeniedGuidance")
                             }
                         }
-                        .tint(ApeColor.primary)
                     }
 
                     NavigationLink {
@@ -222,7 +240,22 @@ struct SettingsView: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
             }
+            .task { await refreshNotificationAuthorization() }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { await refreshNotificationAuthorization() }
+            }
         }
+    }
+
+    private func refreshNotificationAuthorization() async {
+        notificationAuthorizationStatus = await UNUserNotificationCenter.current()
+            .notificationSettings().authorizationStatus
+    }
+
+    private func openNotificationSettings() {
+        guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     private var accountName: String {

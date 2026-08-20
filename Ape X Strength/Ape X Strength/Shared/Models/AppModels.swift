@@ -22,6 +22,7 @@ struct WorkoutSessionDraft {
     let workout: WorkoutPreview
     let startedAt: Date
     let completedSetNumbersByExerciseID: [NSManagedObjectID: Set<Int>]
+    let completedAtByExerciseIDAndSetNumber: [NSManagedObjectID: [Int: Date]]
 }
 
 struct CompletedWorkoutSession {
@@ -46,6 +47,17 @@ struct CompletedSessionSet: Equatable {
     let distance: Decimal
     let weight: Decimal
     let completed: Bool
+    let completedAt: Date?
+
+    init(number: Int, reps: Int, timeSeconds: Double, distance: Decimal, weight: Decimal, completed: Bool, completedAt: Date? = nil) {
+        self.number = number
+        self.reps = reps
+        self.timeSeconds = timeSeconds
+        self.distance = distance
+        self.weight = weight
+        self.completed = completed
+        self.completedAt = completedAt
+    }
 }
 
 struct WorkoutSessionHistoryItem: Identifiable {

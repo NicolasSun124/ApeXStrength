@@ -56,7 +56,8 @@ struct ActiveWorkoutView: View {
         _exercises = State(initialValue: draft.workout.exercises.map { exercise in
             ActiveWorkoutExercise(
                 exercise,
-                completedSetNumbers: draft.completedSetNumbersByExerciseID[exercise.id] ?? []
+                completedSetNumbers: draft.completedSetNumbersByExerciseID[exercise.id] ?? [],
+                completedAtBySetNumber: draft.completedAtByExerciseIDAndSetNumber[exercise.id] ?? [:]
             )
         })
         _startedAt = State(initialValue: draft.startedAt)
@@ -325,6 +326,7 @@ struct ActiveWorkoutView: View {
                     Button {
                         let isFinishing = !set.isCompleted
                         set.isCompleted.toggle()
+                        set.completedAt = isFinishing ? Date() : nil
                         if isFinishing {
                             startRestTimer(seconds: exercise.wrappedValue.targetRestSeconds)
                         }
@@ -411,7 +413,8 @@ struct ActiveWorkoutView: View {
                                     timeSeconds: set.timeSeconds,
                                     distance: set.distance,
                                     weight: set.weight,
-                                    completed: set.isCompleted
+                                    completed: set.isCompleted,
+                                    completedAt: set.completedAt
                                 )
                             }
                         )
@@ -457,7 +460,8 @@ struct ActiveWorkoutView: View {
                         timeSeconds: set.timeSeconds,
                         distance: set.distance,
                         weight: set.weight,
-                        completed: set.isCompleted
+                        completed: set.isCompleted,
+                        completedAt: set.completedAt
                     )
                 }
             )
@@ -695,7 +699,11 @@ private struct ActiveWorkoutExercise: Identifiable {
         alternates = exercise.alternates
     }
 
-    init(_ exercise: WorkoutPreviewExercise, completedSetNumbers: Set<Int>) {
+    init(
+        _ exercise: WorkoutPreviewExercise,
+        completedSetNumbers: Set<Int>,
+        completedAtBySetNumber: [Int: Date]
+    ) {
         exerciseID = exercise.id
         name = exercise.name
         primaryMuscleColorHex = exercise.primaryMuscleColorHex
@@ -703,7 +711,11 @@ private struct ActiveWorkoutExercise: Identifiable {
         difficultyType = exercise.difficultyType
         targetRestSeconds = exercise.targetRestSeconds
         sets = exercise.sets.map {
-            ActiveWorkoutSet($0, isCompleted: completedSetNumbers.contains($0.number))
+            ActiveWorkoutSet(
+                $0,
+                isCompleted: completedSetNumbers.contains($0.number),
+                completedAt: completedAtBySetNumber[$0.number]
+            )
         }
         alternates = exercise.alternates
     }
@@ -972,6 +984,7 @@ private struct ActiveWorkoutSet: Identifiable {
     var distance: Decimal
     var weight: Decimal
     var isCompleted = false
+    var completedAt: Date?
 
     var timeSeconds: Double {
         let components = timeText.split(separator: ":", omittingEmptySubsequences: false)
@@ -993,7 +1006,7 @@ private struct ActiveWorkoutSet: Identifiable {
     }
 
 
-    init(_ set: WorkoutPreviewSet, isCompleted: Bool) {
+    init(_ set: WorkoutPreviewSet, isCompleted: Bool, completedAt: Date?) {
         number = set.number
         reps = set.reps
         let totalSeconds = max(0, Int(set.timeSeconds.rounded()))
@@ -1001,6 +1014,7 @@ private struct ActiveWorkoutSet: Identifiable {
         distance = set.distance
         weight = set.weight
         self.isCompleted = isCompleted
+        self.completedAt = completedAt
     }
 
     init(number: Int) {
