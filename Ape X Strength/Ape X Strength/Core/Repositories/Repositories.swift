@@ -47,13 +47,21 @@ protocol ExerciseRepository {
 final class CoreDataWorkoutRepository: WorkoutRepository {
     private let context: NSManagedObjectContext
     private let settings: any SettingsService
-    private let user: User
+    private let userProvider: () -> User
+    private var user: User { userProvider() }
     private let onSyncRequested: () -> Void
 
     init(context: NSManagedObjectContext, settings: any SettingsService, user: User, onSyncRequested: @escaping () -> Void = {}) {
         self.context = context
         self.settings = settings
-        self.user = user
+        self.userProvider = { user }
+        self.onSyncRequested = onSyncRequested
+    }
+
+    init(context: NSManagedObjectContext, settings: any SettingsService, userProvider: @escaping () -> User, onSyncRequested: @escaping () -> Void = {}) {
+        self.context = context
+        self.settings = settings
+        self.userProvider = userProvider
         self.onSyncRequested = onSyncRequested
     }
 
@@ -413,6 +421,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         tombstone.entityType = entity
         tombstone.clientUUID = uuid
         tombstone.createdAt = Date()
+        tombstone.owner = user
     }
 
     private func editableWorkout(id: NSManagedObjectID) throws -> WorkoutTemplate {
@@ -821,8 +830,8 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
     func fetchAvailableExercises() throws -> [ExerciseListItem] {
         let request = Exercise.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
-        request.predicate = visibleExercisePredicate
-        return try context.fetch(request).map { exercise in
+        request.predicate = NSPredicate(format: "isArchived == NO")
+        return try context.fetch(request).filter(isVisibleExercise).map { exercise in
             let configuration = ExerciseConfiguration(storageValue: exercise.trackingType ?? "")
             return ExerciseListItem(
                 id: exercise.objectID,
@@ -835,12 +844,12 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         }
     }
 
-    private var visibleExercisePredicate: NSPredicate {
-        NSPredicate(
-            format: "isArchived == NO AND (owner == nil OR owner == %@) AND NONE hiddenByUsers == %@",
-            user,
-            user
-        )
+    private func isVisibleExercise(_ exercise: Exercise) -> Bool {
+        let isGlobal = exercise.owner == nil && exercise.clientUUID == nil
+        let belongsToUser = isGlobal || exercise.owner?.objectID == user.objectID
+        let isHidden = (exercise.hiddenByUsers as? Set<User> ?? [])
+            .contains { $0.objectID == user.objectID }
+        return belongsToUser && !isHidden
     }
 
     func fetchTags() throws -> [TagItem] {
@@ -1111,40 +1120,46 @@ enum WorkoutRepositoryError: LocalizedError {
 @MainActor
 final class CoreDataExerciseRepository: ExerciseRepository {
     private let context: NSManagedObjectContext
-    private let user: User
+    private let userProvider: () -> User
+    private var user: User { userProvider() }
     private let onSyncRequested: () -> Void
 
     init(context: NSManagedObjectContext, user: User, onSyncRequested: @escaping () -> Void = {}) {
         self.context = context
-        self.user = user
+        self.userProvider = { user }
+        self.onSyncRequested = onSyncRequested
+    }
+
+    init(context: NSManagedObjectContext, userProvider: @escaping () -> User, onSyncRequested: @escaping () -> Void = {}) {
+        self.context = context
+        self.userProvider = userProvider
         self.onSyncRequested = onSyncRequested
     }
 
     func fetchExercises() throws -> [ExerciseListItem] {
         let request = Exercise.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
-        request.predicate = visibleExercisePredicate
+        request.predicate = NSPredicate(format: "isArchived == NO")
 
-        return try context.fetch(request).map(exerciseListItem)
+        return try context.fetch(request).filter(isVisibleExercise).map(exerciseListItem)
     }
 
     func fetchArchivedExercises() throws -> [ExerciseListItem] {
         let request = Exercise.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
-        request.predicate = NSPredicate(
-            format: "(owner == %@ AND isArchived == YES) OR (owner == nil AND ANY hiddenByUsers == %@)",
-            user,
-            user
-        )
-        return try context.fetch(request).map(exerciseListItem)
+        request.predicate = NSPredicate(format: "isArchived == YES OR ANY hiddenByUsers == %@", user)
+        return try context.fetch(request).filter { exercise in
+            exercise.owner?.objectID == user.objectID
+                || (isGlobalExercise(exercise)
+                    && (exercise.hiddenByUsers as? Set<User> ?? []).contains { $0.objectID == user.objectID })
+        }.map(exerciseListItem)
     }
 
-    private var visibleExercisePredicate: NSPredicate {
-        NSPredicate(
-            format: "isArchived == NO AND (owner == nil OR owner == %@) AND NONE hiddenByUsers == %@",
-            user,
-            user
-        )
+    private func isVisibleExercise(_ exercise: Exercise) -> Bool {
+        let belongsToUser = isGlobalExercise(exercise) || exercise.owner?.objectID == user.objectID
+        let isHidden = (exercise.hiddenByUsers as? Set<User> ?? [])
+            .contains { $0.objectID == user.objectID }
+        return belongsToUser && !isHidden
     }
 
     private func exerciseListItem(_ exercise: Exercise) -> ExerciseListItem {
@@ -1162,7 +1177,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
     func fetchExercise(id: NSManagedObjectID) throws -> ExerciseDetail {
         guard let exercise = try context.existingObject(with: id) as? Exercise,
               !exercise.isDeleted,
-              exercise.owner == nil || exercise.owner == user,
+              isGlobalExercise(exercise) || exercise.owner?.objectID == user.objectID,
               let primaryMuscle = exercise.primaryMuscle else {
             throw ExerciseRepositoryError.exerciseNotFound
         }
@@ -1178,7 +1193,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
             secondaryMuscles: (exercise.secondaryMuscles as? Set<Muscle> ?? [])
                 .map(muscleItem)
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
-            isGlobal: exercise.owner == nil,
+            isGlobal: isGlobalExercise(exercise),
             isArchived: exercise.isArchived
         )
     }
@@ -1261,11 +1276,11 @@ final class CoreDataExerciseRepository: ExerciseRepository {
     func updateExercise(id: NSManagedObjectID, input: NewExercise) throws -> NSManagedObjectID {
         guard let original = try context.existingObject(with: id) as? Exercise,
               !original.isDeleted,
-              original.owner == nil || original.owner == user else {
+              isGlobalExercise(original) || original.owner?.objectID == user.objectID else {
             throw ExerciseRepositoryError.exerciseNotFound
         }
         let exercise: Exercise
-        if original.owner == nil {
+        if isGlobalExercise(original) {
             exercise = Exercise(context: context)
             exercise.clientUUID = UUID()
             exercise.createdAt = Date()
@@ -1288,7 +1303,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
 
     func archiveExercise(id: NSManagedObjectID) throws {
         let exercise = try editableExercise(id: id)
-        if exercise.owner == nil {
+        if isGlobalExercise(exercise) {
             exercise.mutableSetValue(forKey: "hiddenByUsers").add(user)
         } else {
             exercise.isArchived = true
@@ -1300,10 +1315,10 @@ final class CoreDataExerciseRepository: ExerciseRepository {
     func restoreExercise(id: NSManagedObjectID) throws {
         guard let exercise = try context.existingObject(with: id) as? Exercise,
               !exercise.isDeleted,
-              exercise.owner == nil || exercise.owner == user else {
+              isGlobalExercise(exercise) || exercise.owner?.objectID == user.objectID else {
             throw ExerciseRepositoryError.exerciseNotFound
         }
-        if exercise.owner == nil {
+        if isGlobalExercise(exercise) {
             guard exercise.mutableSetValue(forKey: "hiddenByUsers").contains(user) else {
                 throw ExerciseRepositoryError.exerciseNotFound
             }
@@ -1336,7 +1351,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
         guard let exercise = try context.existingObject(with: id) as? Exercise,
               !exercise.isDeleted,
               !exercise.isArchived,
-              exercise.owner == nil || exercise.owner == user,
+              isGlobalExercise(exercise) || exercise.owner?.objectID == user.objectID,
               !exercise.mutableSetValue(forKey: "hiddenByUsers").contains(user) else {
             throw ExerciseRepositoryError.exerciseNotFound
         }
@@ -1349,6 +1364,10 @@ final class CoreDataExerciseRepository: ExerciseRepository {
 
     private func muscleItem(_ muscle: Muscle) -> MuscleItem {
         return MuscleItem(id: muscle.objectID, name: muscle.name ?? "Unknown", colorHex: muscle.colorHex ?? "8AC5FF")
+    }
+
+    private func isGlobalExercise(_ exercise: Exercise) -> Bool {
+        exercise.owner == nil && exercise.clientUUID == nil
     }
 
     private static let defaultMuscles = [

@@ -1,9 +1,17 @@
 import Foundation
 
 struct AuthenticatedUser: Equatable {
+    let id: UUID?
     let email: String
     let name: String
     let isEmailVerified: Bool
+
+    init(id: UUID? = nil, email: String, name: String, isEmailVerified: Bool) {
+        self.id = id
+        self.email = email
+        self.name = name
+        self.isEmailVerified = isEmailVerified
+    }
 }
 
 enum EmailAuthenticationError: LocalizedError {
@@ -37,9 +45,11 @@ protocol EmailAuthenticationService: AnyObject {
     var hasAuthenticatedSession: Bool { get }
     var authenticatedUser: AuthenticatedUser? { get }
     var verifiedEmailAwaitingProfile: String? { get }
+    func logIn(email: String, password: String) async throws
     func sendVerificationCode(to email: String, password: String) async throws
     func verify(code: String, for email: String) async throws
     func completeProfile(name: String) async throws
+    func signOut() async
 }
 
 /// Temporary local implementation used until a real authentication/email provider is connected.
@@ -87,6 +97,21 @@ final class TestEmailAuthenticationService: EmailAuthenticationService {
         return defaults.string(forKey: emailKey)
     }
 
+    func logIn(email: String, password: String) async throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedEmail.contains("@"), normalizedEmail.contains(".") else {
+            throw EmailAuthenticationError.invalidEmail
+        }
+        guard password.count >= 8 else { throw EmailAuthenticationError.weakPassword }
+
+        let user = AuthenticatedUser(email: normalizedEmail, name: "Test Athlete", isEmailVerified: true)
+        try onProfileCompleted?(user)
+        defaults.set(normalizedEmail, forKey: emailKey)
+        defaults.set(user.name, forKey: nameKey)
+        defaults.set(true, forKey: emailVerifiedKey)
+        defaults.set(true, forKey: sessionKey)
+    }
+
     func sendVerificationCode(to email: String, password: String) async throws {
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard normalizedEmail.contains("@"), normalizedEmail.contains(".") else {
@@ -129,4 +154,16 @@ final class TestEmailAuthenticationService: EmailAuthenticationService {
         defaults.set(trimmedName, forKey: nameKey)
         defaults.set(true, forKey: sessionKey)
     }
+
+    func signOut() async {
+        defaults.removeObject(forKey: sessionKey)
+        defaults.removeObject(forKey: emailKey)
+        defaults.removeObject(forKey: nameKey)
+        defaults.removeObject(forKey: emailVerifiedKey)
+        NotificationCenter.default.post(name: .authenticationDidSignOut, object: nil)
+    }
+}
+
+extension Notification.Name {
+    static let authenticationDidSignOut = Notification.Name("authenticationDidSignOut")
 }

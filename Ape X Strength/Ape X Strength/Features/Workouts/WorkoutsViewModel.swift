@@ -220,6 +220,15 @@ final class CreateWorkoutViewModel: ObservableObject {
         } catch { errorMessage = error.localizedDescription }
     }
 
+    func refreshExercises() {
+        do {
+            exercises = try repository.fetchAvailableExercises()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func addExercises(_ ids: Set<NSManagedObjectID>) {
         let alreadySelected = Set(selectedExercises.map(\.id))
         selectedExercises.append(contentsOf: exercises.filter { ids.contains($0.id) && !alreadySelected.contains($0.id) })

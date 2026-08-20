@@ -14,6 +14,7 @@
         <relationship name="hiddenExercises" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Exercise" inverseName="hiddenByUsers" inverseEntity="Exercise"/>
         <relationship name="sessions" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="WorkoutSession" inverseName="user" inverseEntity="WorkoutSession"/>
         <relationship name="tags" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Tag" inverseName="owner" inverseEntity="Tag"/>
+        <relationship name="tombstones" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="SyncTombstone" inverseName="owner" inverseEntity="SyncTombstone"/>
         <relationship name="workoutTemplates" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="WorkoutTemplate" inverseName="user" inverseEntity="WorkoutTemplate"/>
     </entity>
     <entity name="Muscle" representedClassName="Muscle" syncable="YES" codeGenerationType="class">
@@ -135,6 +136,7 @@
         <attribute name="clientUUID" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="entityType" attributeType="String"/>
+        <relationship name="owner" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="User" inverseName="tombstones" inverseEntity="User"/>
     </entity>
     <elements>
         <element name="User" positionX="-720" positionY="-90" width="128" height="149"/>

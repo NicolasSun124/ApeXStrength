@@ -18,7 +18,8 @@ enum SyncServiceError: LocalizedError {
 @MainActor
 final class APISyncService: SyncService {
     private let context: NSManagedObjectContext
-    private let user: User
+    private let userProvider: () -> User
+    private var user: User { userProvider() }
     private let settings: any SettingsService
     private let baseURL: URL
     private let session: URLSession
@@ -27,14 +28,14 @@ final class APISyncService: SyncService {
 
     init(
         context: NSManagedObjectContext,
-        user: User,
+        userProvider: @escaping () -> User,
         settings: any SettingsService,
         baseURL: URL,
         session: URLSession = .shared,
         token: @escaping () -> String?
     ) {
         self.context = context
-        self.user = user
+        self.userProvider = userProvider
         self.settings = settings
         self.baseURL = baseURL
         self.session = session
@@ -177,8 +178,23 @@ final class APISyncService: SyncService {
     }
 
     private func fetch<T: NSManagedObject>(_ type: T.Type, predicate: NSPredicate) throws -> [T] {
-        let request = NSFetchRequest<T>(entityName: String(describing: type)); request.predicate = predicate
+        let entityName = String(describing: type)
+        let request = NSFetchRequest<T>(entityName: entityName)
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [predicate, ownerPredicate(for: entityName)])
         return try context.fetch(request)
+    }
+
+    private func ownerPredicate(for entityName: String) -> NSPredicate {
+        switch entityName {
+        case "Exercise", "Tag": NSPredicate(format: "owner == %@", user)
+        case "WorkoutTemplate", "WorkoutSession": NSPredicate(format: "user == %@", user)
+        case "TemplateExercise": NSPredicate(format: "workoutTemplate.user == %@", user)
+        case "TemplatePlannedSet": NSPredicate(format: "templateExercise.workoutTemplate.user == %@", user)
+        case "SessionExercise": NSPredicate(format: "session.user == %@", user)
+        case "SessionSet": NSPredicate(format: "sessionExercise.session.user == %@", user)
+        case "SyncTombstone": NSPredicate(format: "owner == %@", user)
+        default: NSPredicate(value: false)
+        }
     }
     private func markRecordsSynced(_ accepted: [[String: Any]], sentChanges: [[String: Any]]) {
         let names = ["exercise": "Exercise", "tag": "Tag", "workout": "WorkoutTemplate", "template_exercise": "TemplateExercise",
@@ -300,7 +316,10 @@ final class APISyncService: SyncService {
         return T(context: context)
     }
     private func existing<T: NSManagedObject>(_ type: T.Type, uuid: UUID) throws -> T? {
-        let request = NSFetchRequest<T>(entityName: String(describing: type)); request.fetchLimit = 1; request.predicate = NSPredicate(format: "clientUUID == %@", uuid as CVarArg); return try context.fetch(request).first
+        let entityName = String(describing: type)
+        let request = NSFetchRequest<T>(entityName: entityName); request.fetchLimit = 1
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [NSPredicate(format: "clientUUID == %@", uuid as CVarArg), ownerPredicate(for: entityName)])
+        return try context.fetch(request).first
     }
     private func existing<T: NSManagedObject>(_ type: T.Type, serverUUID: UUID) throws -> T? {
         let request = NSFetchRequest<T>(entityName: String(describing: type)); request.fetchLimit = 1; request.predicate = NSPredicate(format: "serverID == %@", serverUUID as CVarArg); return try context.fetch(request).first

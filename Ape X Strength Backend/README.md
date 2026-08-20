@@ -16,6 +16,8 @@ Endpoints:
 
 - `POST /v1/auth/send-code` with `email` and `password`
 - `POST /v1/auth/verify-code` with `email` and `code`
+- `POST /v1/auth/login` with `email` and `password`
+- `POST /v1/auth/sign-out` with a bearer token
 - `PATCH /v1/profile` with a bearer token and `name`
 - `PUT /v1/sync` with a bearer token, cursor, and incremental record changes. The response includes acknowledgements, conflicts, and server changes after the cursor.
 

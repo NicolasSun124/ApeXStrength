@@ -117,6 +117,8 @@ def send_code():
         return jsonify(error="Password must contain at least 8 characters."), 400
 
     user = db.session.execute(db.select(User).filter_by(email=email)).scalar_one_or_none()
+    if user and user.email_verified:
+        return jsonify(error="An account with this email already exists. Log in instead."), 409
     if user and not check_password_hash(user.password_hash, password):
         return jsonify(error="Incorrect email or password."), 401
     if not user:
@@ -129,6 +131,23 @@ def send_code():
     send_email(email, code)
     db.session.commit()
     return "", 204
+
+
+@app.post("/v1/auth/login")
+def login():
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email", "")).strip().lower()
+    password = str(data.get("password", ""))
+    user = db.session.execute(db.select(User).filter_by(email=email)).scalar_one_or_none()
+    if not user or not check_password_hash(user.password_hash, password):
+        return jsonify(error="Incorrect email or password."), 401
+    if not user.email_verified:
+        return jsonify(error="Verify your email before logging in."), 403
+
+    token = secrets.token_urlsafe(32)
+    user.session_token_hash = digest(token)
+    db.session.commit()
+    return jsonify(token=token, user=user.json())
 
 
 @app.post("/v1/auth/verify-code")
@@ -165,6 +184,19 @@ def save_profile():
     user.name = name
     db.session.commit()
     return jsonify(user=user.json())
+
+
+@app.post("/v1/auth/sign-out")
+def sign_out():
+    header = request.headers.get("Authorization", "")
+    token = header.removeprefix("Bearer ") if header.startswith("Bearer ") else ""
+    user = db.session.execute(db.select(User).filter_by(session_token_hash=digest(token))).scalar_one_or_none()
+    if not token or not user:
+        return jsonify(error="Unauthorized."), 401
+
+    user.session_token_hash = None
+    db.session.commit()
+    return "", 204
 
 
 @app.put("/v1/sync")

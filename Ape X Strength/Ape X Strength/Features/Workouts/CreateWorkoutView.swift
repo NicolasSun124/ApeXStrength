@@ -49,7 +49,10 @@ struct CreateWorkoutView: View {
                     exerciseCard(exercise)
                 }
 
-                Button { isSelectingExercises = true } label: {
+                Button {
+                    viewModel.refreshExercises()
+                    isSelectingExercises = true
+                } label: {
                     Label("Add Exercises", systemImage: "plus")
                 }
                 .buttonStyle(ApeSecondaryButtonStyle())

@@ -46,6 +46,19 @@ struct PersistenceController {
         let context = container.viewContext
         let request = User.fetchRequest()
         request.fetchLimit = 1
+        if let authenticatedUser {
+            if let id = authenticatedUser.id {
+                request.predicate = NSPredicate(
+                    format: "serverID == %@ OR email =[c] %@",
+                    id as CVarArg,
+                    authenticatedUser.email
+                )
+            } else {
+                request.predicate = NSPredicate(format: "email =[c] %@", authenticatedUser.email)
+            }
+        } else {
+            request.predicate = NSPredicate(format: "email == %@", "local@apexstrength.app")
+        }
         if let user = try context.fetch(request).first {
             if let authenticatedUser {
                 try synchronize(authenticatedUser, with: user)
@@ -55,7 +68,7 @@ struct PersistenceController {
         }
 
         let user = User(context: context)
-        user.serverID = UUID()
+        user.serverID = authenticatedUser?.id ?? UUID()
         user.createdAt = Date()
         user.email = authenticatedUser?.email ?? "local@apexstrength.app"
         user.name = authenticatedUser?.name
@@ -80,7 +93,8 @@ struct PersistenceController {
         user.email = authenticatedUser.email
         user.name = authenticatedUser.name
         user.emailVerified = authenticatedUser.isEmailVerified
-        if user.serverID == nil { user.serverID = UUID() }
+        if let id = authenticatedUser.id { user.serverID = id }
+        else if user.serverID == nil { user.serverID = UUID() }
         if user.createdAt == nil { user.createdAt = Date() }
         if user.preferredWeightUnit == nil { user.preferredWeightUnit = "lbs" }
         if user.managedObjectContext?.hasChanges == true {
@@ -94,13 +108,8 @@ struct PersistenceController {
     }
 
     @MainActor
-    func resetUserData() throws {
+    func resetUserData(for user: User) throws {
         let context = container.viewContext
-        let userRequest = User.fetchRequest()
-        userRequest.fetchLimit = 1
-
-        guard let user = try context.fetch(userRequest).first else { return }
-
         let sessionRequest = WorkoutSession.fetchRequest()
         sessionRequest.predicate = NSPredicate(format: "user == %@", user)
         try context.fetch(sessionRequest).forEach(context.delete)

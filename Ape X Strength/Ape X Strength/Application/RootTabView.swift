@@ -31,7 +31,11 @@ struct RootTabView: View {
                 authenticationService: dependencies.authentication,
                 exerciseRepository: dependencies.exercises,
                 workoutRepository: dependencies.workouts,
-                resetData: dependencies.persistence.resetUserData
+                resetData: {
+                    guard let authenticatedUser = dependencies.authentication.authenticatedUser else { return }
+                    let user = try dependencies.persistence.initializeUser(authenticatedUser: authenticatedUser)
+                    try dependencies.persistence.resetUserData(for: user)
+                }
             )
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)

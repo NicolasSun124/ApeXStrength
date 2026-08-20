@@ -81,7 +81,10 @@ struct ActiveWorkoutView: View {
                         exerciseCard(exercise: $exercise)
                     }
 
-                    Button { isSelectingExercise = true } label: {
+                    Button {
+                        loadAvailableExercises()
+                        isSelectingExercise = true
+                    } label: {
                         Label("Add Exercise", systemImage: "plus")
                     }
                     .buttonStyle(ApeSecondaryButtonStyle())

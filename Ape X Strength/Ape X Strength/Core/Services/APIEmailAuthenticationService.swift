@@ -11,6 +11,7 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
     private let emailKey = "apiAuthenticatedEmail"
     private let nameKey = "apiAuthenticatedName"
     private let verifiedKey = "apiEmailVerified"
+    private let userIDKey = "apiAuthenticatedUserID"
 
     init(
         baseURL: URL,
@@ -35,7 +36,12 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
               let email = defaults.string(forKey: emailKey),
               let name = defaults.string(forKey: nameKey),
               !name.isEmpty else { return nil }
-        return AuthenticatedUser(email: email, name: name, isEmailVerified: true)
+        return AuthenticatedUser(
+            id: defaults.string(forKey: userIDKey).flatMap(UUID.init(uuidString:)),
+            email: email,
+            name: name,
+            isEmailVerified: true
+        )
     }
 
     var verifiedEmailAwaitingProfile: String? {
@@ -46,6 +52,36 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
     }
 
     var currentSessionToken: String? { tokenStore.read() }
+
+    func logIn(email: String, password: String) async throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedEmail.contains("@"), normalizedEmail.contains(".") else {
+            throw EmailAuthenticationError.invalidEmail
+        }
+        guard password.count >= 8 else { throw EmailAuthenticationError.weakPassword }
+
+        let request = try makeRequest(
+            path: "auth/login",
+            method: "POST",
+            body: CredentialsRequest(email: normalizedEmail, password: password)
+        )
+        let data = try await perform(request)
+        guard let response = try? JSONDecoder().decode(AuthenticationResponse.self, from: data) else {
+            throw EmailAuthenticationError.invalidResponse
+        }
+        try store(response)
+
+        if let name = response.user.name, !name.isEmpty {
+            try onProfileCompleted?(
+                AuthenticatedUser(
+                    id: response.user.id,
+                    email: response.user.email,
+                    name: name,
+                    isEmailVerified: response.user.emailVerified
+                )
+            )
+        }
+    }
 
     func sendVerificationCode(to email: String, password: String) async throws {
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -76,10 +112,7 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
             throw EmailAuthenticationError.invalidResponse
         }
 
-        try tokenStore.save(response.token)
-        defaults.set(response.user.email, forKey: emailKey)
-        defaults.set(response.user.emailVerified, forKey: verifiedKey)
-        defaults.set(response.user.name ?? "", forKey: nameKey)
+        try store(response)
     }
 
     func completeProfile(name: String) async throws {
@@ -98,6 +131,7 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
         }
 
         let user = AuthenticatedUser(
+            id: response.user.id,
             email: response.user.email.isEmpty ? email : response.user.email,
             name: response.user.name ?? trimmedName,
             isEmailVerified: response.user.emailVerified
@@ -106,6 +140,23 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
         defaults.set(user.email, forKey: emailKey)
         defaults.set(user.name, forKey: nameKey)
         defaults.set(user.isEmailVerified, forKey: verifiedKey)
+        defaults.set(user.id?.uuidString, forKey: userIDKey)
+    }
+
+    func signOut() async {
+        if let token = tokenStore.read() {
+            var request = URLRequest(url: baseURL.appendingPathComponent("auth/sign-out"))
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            _ = try? await session.data(for: request)
+        }
+
+        tokenStore.delete()
+        defaults.removeObject(forKey: emailKey)
+        defaults.removeObject(forKey: nameKey)
+        defaults.removeObject(forKey: verifiedKey)
+        defaults.removeObject(forKey: userIDKey)
+        NotificationCenter.default.post(name: .authenticationDidSignOut, object: nil)
     }
 
     private func makeRequest<Body: Encodable>(path: String, method: String, body: Body) throws -> URLRequest {
@@ -116,6 +167,14 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
         return request
     }
 
+    private func store(_ response: AuthenticationResponse) throws {
+        try tokenStore.save(response.token)
+        defaults.set(response.user.email, forKey: emailKey)
+        defaults.set(response.user.emailVerified, forKey: verifiedKey)
+        defaults.set(response.user.name ?? "", forKey: nameKey)
+        defaults.set(response.user.id.uuidString, forKey: userIDKey)
+    }
+
     private func perform(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -123,7 +182,8 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
         }
         guard 200..<300 ~= httpResponse.statusCode else {
             let serverError = try? JSONDecoder().decode(ServerErrorResponse.self, from: data)
-            throw EmailAuthenticationError.server(serverError?.error ?? "Authentication failed. Please try again.")
+            let fallback = "Server returned HTTP \(httpResponse.statusCode): \(HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode).capitalized)."
+            throw EmailAuthenticationError.server(serverError?.error ?? fallback)
         }
         return data
     }
@@ -153,12 +213,13 @@ private struct ProfileResponse: Decodable {
 }
 
 private struct APIUser: Decodable {
+    let id: UUID
     let email: String
     let emailVerified: Bool
     let name: String?
 
     enum CodingKeys: String, CodingKey {
-        case email, name
+        case id, email, name
         case emailVerified = "email_verified"
     }
 }
@@ -188,6 +249,10 @@ private struct AuthenticationTokenStore {
         guard SecItemCopyMatching(item as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    func delete() {
+        SecItemDelete(query as CFDictionary)
     }
 
     private var query: [String: Any] {

@@ -7,6 +7,7 @@ struct SettingsView: View {
     private let workoutRepository: any WorkoutRepository
     private let resetData: () throws -> Void
     @State private var isShowingResetConfirmation = false
+    @State private var isShowingSignOutConfirmation = false
 
     init(
         viewModel: @autoclosure @escaping () -> SettingsViewModel,
@@ -57,6 +58,22 @@ struct SettingsView: View {
                                 .foregroundStyle(ApeColor.textSecondary)
                         }
                     }
+
+                    Button {
+                        isShowingSignOutConfirmation = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                            Text("Sign Out")
+                        }
+                        .font(.apeHeadline)
+                        .foregroundStyle(ApeColor.textPrimary)
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .background(ApeColor.control)
+                        .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("signOutButton")
 
                     NavigationLink {
                         AboutView()
@@ -195,6 +212,18 @@ struct SettingsView: View {
                 }
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
+            }
+            .confirmationDialog(
+                "Sign out of Ape X Strength?",
+                isPresented: $isShowingSignOutConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Sign Out", role: .destructive) {
+                    Task { await authenticationService.signOut() }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Your training data will remain on this device.")
             }
         }
     }

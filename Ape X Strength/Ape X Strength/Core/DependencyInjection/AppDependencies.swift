@@ -7,6 +7,12 @@ private final class SyncServiceHolder {
 }
 
 @MainActor
+private final class CurrentUserHolder {
+    var user: User
+    init(_ user: User) { self.user = user }
+}
+
+@MainActor
 final class AppDependencies {
     let persistence: PersistenceController
     let workouts: any WorkoutRepository
@@ -36,25 +42,25 @@ final class AppDependencies {
         let context = persistence.container.viewContext
         let syncHolder = SyncServiceHolder()
         let settings = UserDefaultsSettingsService { syncHolder.requestSync() }
-        var repositoryUser: User!
+        var currentUser: CurrentUserHolder!
         let configuredURL = ProcessInfo.processInfo.environment["APE_X_STRENGTH_API_URL"]
             .flatMap(URL.init(string:))
             ?? URL(string: "http://127.0.0.1:5000/v1")!
         let authentication = APIEmailAuthenticationService(
             baseURL: configuredURL
         ) { authenticatedUser in
-            try persistence.synchronize(authenticatedUser, with: repositoryUser)
+            currentUser.user = try persistence.initializeUser(authenticatedUser: authenticatedUser)
         }
         let user: User
         do {
             user = try persistence.initializeUser(authenticatedUser: authentication.authenticatedUser)
-            repositoryUser = user
+            currentUser = CurrentUserHolder(user)
         } catch {
             fatalError("Unable to initialize the temporary user: \(error)")
         }
         let sync = APISyncService(
             context: context,
-            user: user,
+            userProvider: { currentUser.user },
             settings: settings,
             baseURL: configuredURL,
             token: { authentication.currentSessionToken }
@@ -62,8 +68,8 @@ final class AppDependencies {
         syncHolder.service = sync
         return AppDependencies(
             persistence: persistence,
-            workouts: CoreDataWorkoutRepository(context: context, settings: settings, user: user) { syncHolder.requestSync() },
-            exercises: CoreDataExerciseRepository(context: context, user: user) { syncHolder.requestSync() },
+            workouts: CoreDataWorkoutRepository(context: context, settings: settings, userProvider: { currentUser.user }) { syncHolder.requestSync() },
+            exercises: CoreDataExerciseRepository(context: context, userProvider: { currentUser.user }) { syncHolder.requestSync() },
             settings: settings,
             sync: sync,
             authentication: authentication

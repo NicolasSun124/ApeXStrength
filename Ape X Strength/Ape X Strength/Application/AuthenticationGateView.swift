@@ -3,7 +3,8 @@ import SwiftUI
 @MainActor
 final class EmailAuthenticationViewModel: ObservableObject {
     enum Step {
-        case credentials
+        case login
+        case signup
         case verification
         case profile
         case authenticated
@@ -27,7 +28,27 @@ final class EmailAuthenticationViewModel: ObservableObject {
             email = verifiedEmail
             step = .profile
         } else {
-            step = .credentials
+            step = .login
+        }
+    }
+
+    func logIn() async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            try await service.logIn(email: email, password: password)
+            if service.hasAuthenticatedSession {
+                step = .authenticated
+            } else if service.verifiedEmailAwaitingProfile != nil {
+                step = .profile
+            } else {
+                throw EmailAuthenticationError.invalidResponse
+            }
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -76,7 +97,28 @@ final class EmailAuthenticationViewModel: ObservableObject {
     func editCredentials() {
         verificationCode = ""
         errorMessage = nil
-        step = .credentials
+        step = .signup
+    }
+
+    func showSignup() {
+        errorMessage = nil
+        step = .signup
+    }
+
+    func showLogin() {
+        verificationCode = ""
+        name = ""
+        errorMessage = nil
+        step = .login
+    }
+
+    func handleSignOut() {
+        email = ""
+        password = ""
+        verificationCode = ""
+        name = ""
+        errorMessage = nil
+        step = .login
     }
 }
 
@@ -95,8 +137,10 @@ struct AuthenticationGateView: View {
     var body: some View {
         Group {
             switch viewModel.step {
-            case .credentials:
-                credentialsView
+            case .login:
+                loginView
+            case .signup:
+                signupView
             case .verification:
                 verificationView
             case .profile:
@@ -106,33 +150,55 @@ struct AuthenticationGateView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onReceive(NotificationCenter.default.publisher(for: .authenticationDidSignOut)) { _ in
+            viewModel.handleSignOut()
+        }
     }
 
-    private var credentialsView: some View {
+    private var loginView: some View {
         authenticationContainer {
-            Text("Sign in")
+            Text("Log in")
                 .font(.apeLargeTitle)
                 .foregroundStyle(ApeColor.textPrimary)
 
-            Text("Enter your email and password. We'll send a verification code to confirm your email.")
+            Text("Welcome back. Enter your email and password to continue.")
                 .font(.apeBody)
                 .foregroundStyle(ApeColor.textSecondary)
                 .multilineTextAlignment(.center)
 
-            VStack(spacing: ApeSpacing.md) {
-                TextField("Email address", text: $viewModel.email)
-                    .textFieldStyle(ApeTextFieldStyle())
-                    .textContentType(.emailAddress)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .accessibilityIdentifier("emailField")
+            credentialsFields
 
-                SecureField("Password", text: $viewModel.password)
-                    .textFieldStyle(ApeTextFieldStyle())
-                    .textContentType(.password)
-                    .accessibilityIdentifier("passwordField")
+            errorText
+
+            Button {
+                Task { await viewModel.logIn() }
+            } label: {
+                loadingLabel("Log in")
             }
+            .buttonStyle(ApePrimaryButtonStyle())
+            .disabled(viewModel.isLoading)
+            .accessibilityIdentifier("loginButton")
+
+            Button("Don't have an account? Sign up") {
+                viewModel.showSignup()
+            }
+            .font(.apeCallout)
+            .foregroundStyle(ApeColor.primary)
+        }
+    }
+
+    private var signupView: some View {
+        authenticationContainer {
+            Text("Create account")
+                .font(.apeLargeTitle)
+                .foregroundStyle(ApeColor.textPrimary)
+
+            Text("Enter your email and choose a password. We'll send a code to verify your email.")
+                .font(.apeBody)
+                .foregroundStyle(ApeColor.textSecondary)
+                .multilineTextAlignment(.center)
+
+            credentialsFields
 
             errorText
 
@@ -144,6 +210,29 @@ struct AuthenticationGateView: View {
             .buttonStyle(ApePrimaryButtonStyle())
             .disabled(viewModel.isLoading)
             .accessibilityIdentifier("sendVerificationCodeButton")
+
+            Button("Already have an account? Log in") {
+                viewModel.showLogin()
+            }
+            .font(.apeCallout)
+            .foregroundStyle(ApeColor.primary)
+        }
+    }
+
+    private var credentialsFields: some View {
+        VStack(spacing: ApeSpacing.md) {
+            TextField("Email address", text: $viewModel.email)
+                .textFieldStyle(ApeTextFieldStyle())
+                .textContentType(.emailAddress)
+                .keyboardType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("emailField")
+
+            SecureField("Password", text: $viewModel.password)
+                .textFieldStyle(ApeTextFieldStyle())
+                .textContentType(.password)
+                .accessibilityIdentifier("passwordField")
         }
     }
 

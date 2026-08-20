@@ -50,8 +50,9 @@ struct ExercisesView: View {
                     .accessibilityLabel("Create exercise")
             }
             .sheet(isPresented: $isCreatingExercise) {
-                CreateExerciseView(viewModel: CreateExerciseViewModel(repository: repository)) { _ in
-                    viewModel.didCreateExercise()
+                CreateExerciseView(viewModel: CreateExerciseViewModel(repository: repository)) { savedExerciseID in
+                    searchText = ""
+                    viewModel.didCreateExercise(id: savedExerciseID)
                 }
             }
         }

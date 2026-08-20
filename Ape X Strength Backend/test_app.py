@@ -75,6 +75,34 @@ def test_authentication_flow():
         ]})
         assert resurrect.get_json()["conflicts"][0]["operation"] == "delete"
 
+        response = client.post(
+            "/v1/auth/sign-out",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 204
+
+        response = client.patch(
+            "/v1/profile",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": "Someone Else"},
+        )
+        assert response.status_code == 401
+
+        response = client.post(
+            "/v1/auth/login",
+            json={"email": "athlete@example.com", "password": "password123"},
+        )
+        assert response.status_code == 200
+        login_token = response.get_json()["token"]
+        assert login_token != token
+
+        response = client.patch(
+            "/v1/profile",
+            headers={"Authorization": f"Bearer {login_token}"},
+            json={"name": "Logged In Athlete"},
+        )
+        assert response.status_code == 200
+
 
 def test_sync_requires_authentication_and_complete_snapshot():
     backend.app.config.update(TESTING=True)
