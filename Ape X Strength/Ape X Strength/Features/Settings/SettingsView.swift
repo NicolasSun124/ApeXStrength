@@ -7,8 +7,6 @@ struct SettingsView: View {
     private let workoutRepository: any WorkoutRepository
     private let resetData: () throws -> Void
     @State private var isShowingResetConfirmation = false
-    @State private var isShowingPasswordReset = false
-    @State private var isShowingSignOutConfirmation = false
 
     init(
         viewModel: @autoclosure @escaping () -> SettingsViewModel,
@@ -28,10 +26,10 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: ApeSpacing.md) {
-                    ApeCard {
-                        VStack(alignment: .leading, spacing: ApeSpacing.md) {
-                            Text("Account").font(.apeHeadline)
-
+                    NavigationLink {
+                        AccountSettingsView(authenticationService: authenticationService)
+                    } label: {
+                        ApeCard {
                             HStack(spacing: ApeSpacing.md) {
                                 Image(systemName: "person.fill")
                                     .font(.title2)
@@ -52,42 +50,14 @@ struct SettingsView: View {
                                 }
 
                                 Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.apeCaption)
+                                    .foregroundStyle(ApeColor.textSecondary)
                             }
-
-                            Text("Your account details come from your verified sign-in.")
-                                .font(.apeCallout)
-                                .foregroundStyle(ApeColor.textSecondary)
-
-                            Button {
-                                isShowingPasswordReset = true
-                            } label: {
-                                Label("Reset Password", systemImage: "key.fill")
-                                    .font(.apeHeadline)
-                                    .foregroundStyle(ApeColor.primary)
-                                    .frame(maxWidth: .infinity, minHeight: 48)
-                                    .background(ApeColor.primarySoft)
-                                    .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("settingsResetPasswordButton")
                         }
-                    }
-
-                    Button {
-                        isShowingSignOutConfirmation = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                            Text("Sign Out")
-                        }
-                        .font(.apeHeadline)
-                        .foregroundStyle(ApeColor.textPrimary)
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                        .background(ApeColor.control)
-                        .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityIdentifier("signOutButton")
+                    .accessibilityIdentifier("accountSettingsLink")
 
                     NavigationLink {
                         AboutView()
@@ -227,25 +197,6 @@ struct SettingsView: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
             }
-            .sheet(isPresented: $isShowingPasswordReset) {
-                SettingsPasswordResetView(
-                    email: accountEmail,
-                    authenticationService: authenticationService
-                )
-                .presentationDragIndicator(.visible)
-            }
-            .confirmationDialog(
-                "Sign out of Ape X Strength?",
-                isPresented: $isShowingSignOutConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Sign Out", role: .destructive) {
-                    Task { await authenticationService.signOut() }
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Your training data will remain on this device.")
-            }
         }
     }
 
@@ -267,6 +218,121 @@ struct SettingsView: View {
         authenticationService.authenticatedUser?.isEmailVerified == true
             ? ApeColor.success
             : ApeColor.warning
+    }
+}
+
+private struct AccountSettingsView: View {
+    let authenticationService: any EmailAuthenticationService
+    @State private var isShowingPasswordReset = false
+    @State private var isShowingSignOutConfirmation = false
+
+    private var user: AuthenticatedUser? {
+        authenticationService.authenticatedUser
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: ApeSpacing.md) {
+                ApeCard {
+                    VStack(spacing: ApeSpacing.md) {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 30))
+                            .foregroundStyle(ApeColor.primary)
+                            .frame(width: 72, height: 72)
+                            .background(ApeColor.primarySoft)
+                            .clipShape(Circle())
+
+                        VStack(spacing: ApeSpacing.xxs) {
+                            Text(user?.name ?? "Ape Athlete")
+                                .font(.apeHeadline)
+                            Text(user?.email ?? "No email available")
+                                .font(.apeCallout)
+                                .foregroundStyle(ApeColor.textSecondary)
+                            Label(
+                                user?.isEmailVerified == true ? "Verified email" : "Email not verified",
+                                systemImage: user?.isEmailVerified == true ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+                            )
+                            .font(.apeCaption)
+                            .foregroundStyle(user?.isEmailVerified == true ? ApeColor.success : ApeColor.warning)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
+                Button {
+                    isShowingPasswordReset = true
+                } label: {
+                    settingsActionLabel(
+                        title: "Reset Password",
+                        icon: "key.fill",
+                        color: ApeColor.primary,
+                        background: ApeColor.primarySoft
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("settingsResetPasswordButton")
+
+                Button {
+                    isShowingSignOutConfirmation = true
+                } label: {
+                    settingsActionLabel(
+                        title: "Sign Out",
+                        icon: "rectangle.portrait.and.arrow.right",
+                        color: ApeColor.textPrimary,
+                        background: ApeColor.control
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("signOutButton")
+            }
+            .padding(ApeSpacing.md)
+        }
+        .background(ApeColor.background.ignoresSafeArea())
+        .navigationTitle("Account")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(ApeColor.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .sheet(isPresented: $isShowingPasswordReset) {
+            SettingsPasswordResetView(
+                email: user?.email ?? "",
+                authenticationService: authenticationService
+            )
+            .presentationDragIndicator(.visible)
+        }
+        .confirmationDialog(
+            "Sign out of Ape X Strength?",
+            isPresented: $isShowingSignOutConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Sign Out", role: .destructive) {
+                Task { await authenticationService.signOut() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Your training data will remain on this device.")
+        }
+    }
+
+    private func settingsActionLabel(
+        title: String,
+        icon: String,
+        color: Color,
+        background: Color
+    ) -> some View {
+        HStack {
+            Image(systemName: icon)
+            Text(title)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.apeCaption)
+        }
+        .font(.apeHeadline)
+        .foregroundStyle(color)
+        .padding(.horizontal, ApeSpacing.md)
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .background(background)
+        .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
     }
 }
 
