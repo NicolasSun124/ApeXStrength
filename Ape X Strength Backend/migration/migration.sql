@@ -27,3 +27,5 @@ CREATE TABLE sync_records (
 );
 CREATE INDEX ix_sync_records_user_id ON sync_records(user_id);
 CREATE INDEX ix_sync_records_user_revision ON sync_records(user_id, revision);
+
+-- Apply migration/normalized_domain_migration.sql after this baseline schema.

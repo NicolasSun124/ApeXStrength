@@ -6,7 +6,9 @@ Small Flask/PostgreSQL prototype for the current iOS authentication flow.
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-psql "$DATABASE_URL" -f migration.sql
+psql "$DATABASE_URL" -f migration/migration.sql
+psql "$DATABASE_URL" -f migration/normalized_domain_migration.sql
+psql "$DATABASE_URL" -f migration/premade_domain_seed.sql
 flask --app app run --debug
 ```
 
@@ -28,7 +30,21 @@ flask --app app run --debug
 
 Open `http://localhost:8025` to read verification and password-reset emails. The API sends SMTP mail to Mailpit at `localhost:1025` by default. Every code is a cryptographically random six-digit value and expires after 10 minutes.
 
-For an existing database, run `incremental_sync_migration.sql` when needed and run `password_reset_migration.sql` once before using password reset.
+For an existing database, apply the scripts in `migration/` that have not yet
+been run. `normalized_domain_migration.sql` introduces the relational domain
+schema. `sync_records` remains the incremental synchronization journal; the new
+tables provide the normalized relational persistence layer for application data.
+
+The normalized schema includes user settings, muscles, exercises, tags, workout
+templates, planned exercises/sets, workout sessions, performed exercises/sets,
+and explicit join tables for all many-to-many relationships. Foreign keys,
+ownership-scoped unique client identifiers, ordering constraints, value checks,
+and cascade behavior enforce the domain invariants in PostgreSQL.
+
+`PUT /v1/sync` writes accepted changes to both the sync journal and the matching
+normalized tables in one transaction. Relationship identifiers are resolved
+within the authenticated user's records, and deletions remove the normalized row
+while retaining the journal tombstone used for cross-device conflict handling.
 
 ## Production email with Brevo
 

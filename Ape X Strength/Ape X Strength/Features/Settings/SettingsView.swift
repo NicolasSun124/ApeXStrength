@@ -5,7 +5,12 @@ struct SettingsView: View {
     private let authenticationService: any EmailAuthenticationService
     private let exerciseRepository: any ExerciseRepository
     private let workoutRepository: any WorkoutRepository
+    private let hasPendingSyncChanges: () throws -> Bool
+    private let syncData: () async throws -> Void
     private let resetData: () throws -> Void
+    @State private var syncStatus: SyncStatus = .ready
+    @State private var isShowingSyncConfirmation = false
+    @State private var isShowingSyncError = false
     @State private var isShowingResetConfirmation = false
 
     init(
@@ -13,12 +18,16 @@ struct SettingsView: View {
         authenticationService: any EmailAuthenticationService,
         exerciseRepository: any ExerciseRepository,
         workoutRepository: any WorkoutRepository,
+        hasPendingSyncChanges: @escaping () throws -> Bool,
+        syncData: @escaping () async throws -> Void,
         resetData: @escaping () throws -> Void
     ) {
         _viewModel = StateObject(wrappedValue: viewModel())
         self.authenticationService = authenticationService
         self.exerciseRepository = exerciseRepository
         self.workoutRepository = workoutRepository
+        self.hasPendingSyncChanges = hasPendingSyncChanges
+        self.syncData = syncData
         self.resetData = resetData
     }
 
@@ -27,7 +36,12 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: ApeSpacing.md) {
                     NavigationLink {
-                        AccountSettingsView(authenticationService: authenticationService)
+                        AccountSettingsView(
+                            authenticationService: authenticationService,
+                            syncStatus: $syncStatus,
+                            refreshSyncStatus: refreshSyncStatus,
+                            requestSync: { isShowingSyncConfirmation = true }
+                        )
                     } label: {
                         ApeCard {
                             HStack(spacing: ApeSpacing.md) {
@@ -189,6 +203,17 @@ struct SettingsView: View {
             .toolbarBackground(ApeColor.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .alert("Sync your data?", isPresented: $isShowingSyncConfirmation) {
+                Button("No", role: .cancel) { }
+                Button("Yes") { synchronizeData() }
+            } message: {
+                Text("Your latest data will be uploaded and changes from your account will be downloaded.")
+            }
+            .alert("Sync Failed", isPresented: $isShowingSyncError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(syncStatus.message)
+            }
             .sheet(isPresented: $isShowingResetConfirmation) {
                 ResetDataConfirmationView {
                     try resetData()
@@ -219,10 +244,103 @@ struct SettingsView: View {
             ? ApeColor.success
             : ApeColor.warning
     }
+
+    private func synchronizeData() {
+        syncStatus = .syncing
+        Task {
+            do {
+                try await syncData()
+                syncStatus = .synced
+            } catch {
+                syncStatus = .failed(error.localizedDescription)
+                isShowingSyncError = true
+            }
+        }
+    }
+
+    private func refreshSyncStatus() {
+        guard syncStatus != .syncing else { return }
+        do {
+            syncStatus = try hasPendingSyncChanges() ? .ready : .synced
+        } catch {
+            syncStatus = .failed(error.localizedDescription)
+        }
+    }
+}
+
+private enum SyncStatus: Equatable {
+    case ready
+    case syncing
+    case synced
+    case failed(String)
+
+    var message: String {
+        switch self {
+        case .ready: return "Ready to sync"
+        case .syncing: return "Syncing your data…"
+        case .synced: return "Your data is up to date"
+        case let .failed(message): return message
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .ready: return "xmark.circle.fill"
+        case .syncing: return "arrow.triangle.2.circlepath"
+        case .synced: return "checkmark.circle.fill"
+        case .failed: return "xmark.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .syncing: return ApeColor.primary
+        case .synced: return ApeColor.success
+        case .ready, .failed: return ApeColor.destructive
+        }
+    }
+}
+
+private struct SyncStatusCard: View {
+    let status: SyncStatus
+
+    var body: some View {
+        ApeCard {
+            HStack(spacing: ApeSpacing.md) {
+                Group {
+                    if status == .syncing {
+                        ProgressView()
+                            .tint(ApeColor.primary)
+                    } else {
+                        Image(systemName: status.icon)
+                            .foregroundStyle(status.color)
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .background(status.color.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
+
+                VStack(alignment: .leading, spacing: ApeSpacing.xxs) {
+                    Text("Sync Status").font(.apeHeadline)
+                    Text(status.message)
+                        .font(.apeCallout)
+                        .foregroundStyle(status.color)
+                }
+
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.apeCaption)
+                    .foregroundStyle(ApeColor.textSecondary)
+            }
+        }
+    }
 }
 
 private struct AccountSettingsView: View {
     let authenticationService: any EmailAuthenticationService
+    @Binding var syncStatus: SyncStatus
+    let refreshSyncStatus: () -> Void
+    let requestSync: () -> Void
     @State private var isShowingPasswordReset = false
     @State private var isShowingSignOutConfirmation = false
 
@@ -259,6 +377,14 @@ private struct AccountSettingsView: View {
                     .frame(maxWidth: .infinity)
                 }
 
+                Button(action: requestSync) {
+                    SyncStatusCard(status: syncStatus)
+                }
+                .buttonStyle(.plain)
+                .disabled(syncStatus == .syncing)
+                .accessibilityIdentifier("accountSyncStatusButton")
+                .accessibilityHint("Prompts you to sync your data")
+
                 Button {
                     isShowingPasswordReset = true
                 } label: {
@@ -293,6 +419,7 @@ private struct AccountSettingsView: View {
         .toolbarBackground(ApeColor.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .onAppear(perform: refreshSyncStatus)
         .sheet(isPresented: $isShowingPasswordReset) {
             SettingsPasswordResetView(
                 email: user?.email ?? "",

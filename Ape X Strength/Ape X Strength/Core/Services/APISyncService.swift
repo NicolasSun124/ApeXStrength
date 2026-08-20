@@ -42,6 +42,11 @@ final class APISyncService: SyncService {
         self.token = token
     }
 
+    func hasPendingChanges() throws -> Bool {
+        if user.syncProtocolVersion < 2 { return true }
+        return try !changes(forceAll: false).isEmpty
+    }
+
     func syncIfNeeded() async throws {
         if let runningTask { try await runningTask.value }
         let task = Task { @MainActor in try await performSync() }

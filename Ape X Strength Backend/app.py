@@ -75,6 +75,364 @@ class SyncRecord(db.Model):
     updated_at = db.Column(db.DateTime(timezone=True), nullable=False)
 
 
+workout_template_tags = db.Table(
+    "workout_template_tags",
+    db.Column("workout_template_id", db.Uuid, db.ForeignKey("workout_templates.id", ondelete="CASCADE"), primary_key=True),
+    db.Column("tag_id", db.Uuid, db.ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
+
+exercise_secondary_muscles = db.Table(
+    "exercise_secondary_muscles",
+    db.Column("exercise_id", db.Uuid, db.ForeignKey("exercises.id", ondelete="CASCADE"), primary_key=True),
+    db.Column("muscle_id", db.Uuid, db.ForeignKey("muscles.id", ondelete="RESTRICT"), primary_key=True),
+)
+
+template_exercise_alternates = db.Table(
+    "template_exercise_alternates",
+    db.Column("template_exercise_id", db.Uuid, db.ForeignKey("template_exercises.id", ondelete="CASCADE"), primary_key=True),
+    db.Column("exercise_id", db.Uuid, db.ForeignKey("exercises.id", ondelete="RESTRICT"), primary_key=True),
+)
+
+
+class UserSettings(db.Model):
+    __tablename__ = "user_settings"
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    weight_unit = db.Column(db.String(16), nullable=False, default="lbs")
+    distance_unit = db.Column(db.String(16), nullable=False, default="mi")
+    rest_timer_notifications_enabled = db.Column(db.Boolean, nullable=False, default=True)
+
+
+class Muscle(db.Model):
+    __tablename__ = "muscles"
+    id = db.Column(db.Uuid, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    color_hex = db.Column(db.String(6), nullable=False)
+
+
+class Exercise(db.Model):
+    __tablename__ = "exercises"
+    __table_args__ = (db.UniqueConstraint("user_id", "client_uuid"),)
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    client_uuid = db.Column(db.String(64))
+    name = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    is_archived = db.Column(db.Boolean, nullable=False, default=False)
+    tracking_type = db.Column(db.String(80), nullable=False)
+    target_rest_seconds = db.Column(db.Integer, nullable=False, default=120)
+    primary_muscle_id = db.Column(db.Uuid, db.ForeignKey("muscles.id", ondelete="RESTRICT"))
+    secondary_muscles = db.relationship(Muscle, secondary=exercise_secondary_muscles)
+
+
+class Tag(db.Model):
+    __tablename__ = "tags"
+    __table_args__ = (db.UniqueConstraint("user_id", "client_uuid"),)
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_uuid = db.Column(db.String(64), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+
+
+class WorkoutTemplate(db.Model):
+    __tablename__ = "workout_templates"
+    __table_args__ = (db.UniqueConstraint("user_id", "client_uuid"),)
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_uuid = db.Column(db.String(64), nullable=False)
+    name = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    is_archived = db.Column(db.Boolean, nullable=False, default=False)
+    tags = db.relationship(Tag, secondary=workout_template_tags)
+
+
+class TemplateExercise(db.Model):
+    __tablename__ = "template_exercises"
+    __table_args__ = (db.UniqueConstraint("user_id", "client_uuid"),)
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_uuid = db.Column(db.String(64), nullable=False)
+    workout_template_id = db.Column(db.Uuid, db.ForeignKey("workout_templates.id", ondelete="CASCADE"), nullable=False)
+    exercise_id = db.Column(db.Uuid, db.ForeignKey("exercises.id", ondelete="RESTRICT"), nullable=False)
+    position = db.Column(db.Integer, nullable=False)
+    alternate_exercises = db.relationship(Exercise, secondary=template_exercise_alternates)
+
+
+class TemplateSet(db.Model):
+    __tablename__ = "template_sets"
+    __table_args__ = (db.UniqueConstraint("user_id", "client_uuid"),)
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_uuid = db.Column(db.String(64), nullable=False)
+    template_exercise_id = db.Column(db.Uuid, db.ForeignKey("template_exercises.id", ondelete="CASCADE"), nullable=False)
+    set_number = db.Column(db.Integer, nullable=False)
+    is_warmup = db.Column(db.Boolean, nullable=False, default=False)
+    planned_reps = db.Column(db.Integer)
+    planned_time_seconds = db.Column(db.Float)
+    planned_distance = db.Column(db.Numeric(12, 3))
+    planned_weight = db.Column(db.Numeric(12, 3))
+
+
+class WorkoutSession(db.Model):
+    __tablename__ = "workout_sessions"
+    __table_args__ = (db.UniqueConstraint("user_id", "client_uuid"),)
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_uuid = db.Column(db.String(64), nullable=False)
+    workout_template_id = db.Column(db.Uuid, db.ForeignKey("workout_templates.id", ondelete="SET NULL"))
+    started_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    ended_at = db.Column(db.DateTime(timezone=True))
+    duration_seconds = db.Column(db.BigInteger)
+    rating = db.Column(db.SmallInteger)
+    note = db.Column(db.Text)
+    percent_completed = db.Column(db.Float)
+    volume_weight = db.Column(db.Numeric(14, 3))
+    average_rest_seconds = db.Column(db.Float)
+    estimated_intensity = db.Column(db.Float)
+
+
+class SessionExercise(db.Model):
+    __tablename__ = "session_exercises"
+    __table_args__ = (db.UniqueConstraint("user_id", "client_uuid"),)
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_uuid = db.Column(db.String(64), nullable=False)
+    workout_session_id = db.Column(db.Uuid, db.ForeignKey("workout_sessions.id", ondelete="CASCADE"), nullable=False)
+    exercise_id = db.Column(db.Uuid, db.ForeignKey("exercises.id", ondelete="SET NULL"))
+    position = db.Column(db.Integer, nullable=False)
+    exercise_name = db.Column(db.String(160), nullable=False)
+    tracking_type = db.Column(db.String(80), nullable=False)
+    difficulty_type = db.Column(db.String(80), nullable=False)
+    primary_muscle_name = db.Column(db.String(120), nullable=False)
+    primary_muscle_color_hex = db.Column(db.String(6), nullable=False)
+    target_rest_seconds = db.Column(db.Integer)
+
+
+class SessionSet(db.Model):
+    __tablename__ = "session_sets"
+    __table_args__ = (db.UniqueConstraint("user_id", "client_uuid"),)
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_uuid = db.Column(db.String(64), nullable=False)
+    session_exercise_id = db.Column(db.Uuid, db.ForeignKey("session_exercises.id", ondelete="CASCADE"), nullable=False)
+    set_number = db.Column(db.Integer, nullable=False)
+    completed = db.Column(db.Boolean, nullable=False, default=False)
+    completed_at = db.Column(db.DateTime(timezone=True))
+    is_warmup = db.Column(db.Boolean, nullable=False, default=False)
+    reps = db.Column(db.Integer)
+    time_seconds = db.Column(db.Float)
+    distance = db.Column(db.Numeric(12, 3))
+    weight = db.Column(db.Numeric(12, 3))
+    pace = db.Column(db.Float)
+
+
+DOMAIN_MODELS = {
+    "exercise": Exercise,
+    "tag": Tag,
+    "workout": WorkoutTemplate,
+    "template_exercise": TemplateExercise,
+    "template_set": TemplateSet,
+    "workout_session": WorkoutSession,
+    "session_exercise": SessionExercise,
+    "session_set": SessionSet,
+}
+
+PREMADE_MUSCLES = (
+    "Abdominals", "Abductors", "Adductors", "Biceps", "Calves", "Forearm Extensors",
+    "Forearm Flexors", "Front Deltoid", "Gluteus maximus", "Hamstrings", "Lateral Deltoid",
+    "Lats", "Lower Back", "Lower Chest", "Lower Traps", "Middle Traps", "Obliques", "Quads",
+    "Rear Deltoid", "Triceps", "Upper Chest", "Upper Traps",
+)
+PREMADE_TAGS = (
+    "Upper", "Lower", "Core", "Push", "Pull", "Legs", "Back", "Chest", "Hypertrophy",
+    "Strength", "Plyometrics", "Calisthenics", "Circuit", "Beginner", "Intermediate",
+    "Advanced", "Endurance", "Flexibility", "Stability", "Cardio", "Functional", "Bodyweight",
+)
+
+
+class DomainProjectionError(ValueError):
+    pass
+
+
+def deterministic_seed_uuid(value):
+    value_hash = hashlib.md5(value.encode(), usedforsecurity=False).hexdigest()
+    return uuid.UUID(f"{value_hash[:8]}-{value_hash[8:12]}-5{value_hash[13:16]}-a{value_hash[17:20]}-{value_hash[20:32]}")
+
+
+def seed_premade_domain_data(user):
+    for name in PREMADE_MUSCLES:
+        existing = db.session.execute(db.select(Muscle).filter(db.func.lower(Muscle.name) == name.lower())).scalar_one_or_none()
+        if not existing:
+            db.session.add(Muscle(
+                id=deterministic_seed_uuid(f"apexstrength:muscle:{name.lower()}"),
+                name=name,
+                color_hex="8AC5FF",
+            ))
+    for name in PREMADE_TAGS:
+        existing = db.session.execute(db.select(Tag).filter(
+            Tag.user_id == user.id, db.func.lower(Tag.name) == name.lower()
+        )).scalar_one_or_none()
+        if not existing:
+            tag_id = deterministic_seed_uuid(f"apexstrength:tag:{user.id}:{name.lower()}")
+            db.session.add(Tag(id=tag_id, user_id=user.id, client_uuid=str(tag_id), name=name))
+
+
+def parsed_datetime(value, default=None):
+    if not value:
+        return default
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as error:
+        raise DomainProjectionError(f"Invalid date: {value}") from error
+
+
+def domain_row(model, user_id, client_uuid):
+    return db.session.execute(db.select(model).filter_by(
+        user_id=user_id, client_uuid=client_uuid
+    )).scalar_one_or_none()
+
+
+def require_domain_row(model, user_id, client_uuid, field):
+    # The current child row is still incomplete; do not let this lookup flush it
+    # before its required foreign keys have been assigned.
+    with db.session.no_autoflush:
+        row = domain_row(model, user_id, str(client_uuid or ""))
+    if not row:
+        raise DomainProjectionError(f"{field} references a record that has not been synced.")
+    return row
+
+
+def upsert_muscle(raw_id, name, color):
+    if not raw_id:
+        return None
+    try:
+        muscle_id = uuid.UUID(str(raw_id))
+    except ValueError as error:
+        raise DomainProjectionError("Muscle identifiers must be UUIDs.") from error
+    muscle = db.session.get(Muscle, muscle_id)
+    if not muscle and name:
+        muscle = db.session.execute(db.select(Muscle).filter(
+            db.func.lower(Muscle.name) == str(name).lower()
+        )).scalar_one_or_none()
+    if not muscle:
+        muscle = Muscle(id=muscle_id, name=str(name or "Unknown")[:120], color_hex=str(color or "8AC5FF")[:6])
+        db.session.add(muscle)
+    else:
+        muscle.name = str(name or muscle.name)[:120]
+        muscle.color_hex = str(color or muscle.color_hex)[:6]
+    return muscle
+
+
+def project_domain_delete(user_id, entity, client_uuid):
+    if entity == "settings":
+        settings = db.session.get(UserSettings, user_id)
+        if settings:
+            db.session.delete(settings)
+        return
+    model = DOMAIN_MODELS.get(entity)
+    if model:
+        row = domain_row(model, user_id, client_uuid)
+        if row:
+            db.session.delete(row)
+
+
+def project_domain_upsert(user_id, entity, client_uuid, data, now):
+    """Project one accepted sync change into its normalized domain table."""
+    if entity == "settings":
+        row = db.session.get(UserSettings, user_id) or UserSettings(user_id=user_id)
+        db.session.add(row)
+        row.weight_unit = str(data.get("weight_unit") or "lbs")
+        row.distance_unit = str(data.get("distance_unit") or "mi")
+        row.rest_timer_notifications_enabled = bool(data.get("rest_timer_notifications_enabled", True))
+        return
+
+    model = DOMAIN_MODELS.get(entity)
+    if not model:
+        return
+    row = domain_row(model, user_id, client_uuid)
+    if entity == "tag" and not row and data.get("name"):
+        row = db.session.execute(db.select(Tag).filter(
+            Tag.user_id == user_id,
+            db.func.lower(Tag.name) == str(data["name"]).lower(),
+        )).scalar_one_or_none()
+        if row:
+            row.client_uuid = client_uuid
+    if not row:
+        row = model(user_id=user_id, client_uuid=client_uuid)
+        db.session.add(row)
+
+    if entity == "exercise":
+        row.name = str(data.get("name") or "Untitled Exercise")[:160]
+        row.created_at = parsed_datetime(data.get("created_at"), now)
+        row.is_archived = bool(data.get("is_archived", False))
+        row.tracking_type = str(data.get("tracking_type") or "reps|weighted")[:80]
+        row.target_rest_seconds = int(data.get("target_rest_seconds", 120))
+        primary = upsert_muscle(data.get("primary_muscle_id"), data.get("primary_muscle_name"), data.get("primary_muscle_color"))
+        row.primary_muscle_id = primary.id if primary else None
+        secondary_ids = data.get("secondary_muscle_ids") or []
+        row.secondary_muscles = [
+            upsert_muscle(raw_id, "Unknown", "8AC5FF") for raw_id in secondary_ids
+        ]
+    elif entity == "tag":
+        row.name = str(data.get("name") or "Untitled Tag")[:120]
+    elif entity == "workout":
+        row.name = str(data.get("name") or "Untitled Workout")[:160]
+        row.created_at = parsed_datetime(data.get("created_at"), now)
+        row.updated_at = parsed_datetime(data.get("updated_at"), now)
+        row.is_archived = bool(data.get("is_archived", False))
+        row.tags = [require_domain_row(Tag, user_id, item, "tag_ids") for item in data.get("tag_ids") or []]
+    elif entity == "template_exercise":
+        row.workout_template_id = require_domain_row(WorkoutTemplate, user_id, data.get("workout_id"), "workout_id").id
+        row.exercise_id = require_domain_row(Exercise, user_id, data.get("exercise_id"), "exercise_id").id
+        row.position = int(data.get("position", 0))
+        row.alternate_exercises = [
+            require_domain_row(Exercise, user_id, item, "alternate_exercise_ids")
+            for item in data.get("alternate_exercise_ids") or []
+        ]
+    elif entity == "template_set":
+        row.template_exercise_id = require_domain_row(TemplateExercise, user_id, data.get("template_exercise_id"), "template_exercise_id").id
+        row.set_number = int(data.get("number", 1))
+        row.is_warmup = bool(data.get("warmup", False))
+        row.planned_reps = data.get("reps")
+        row.planned_time_seconds = data.get("time_seconds")
+        row.planned_distance = data.get("distance")
+        row.planned_weight = data.get("weight")
+    elif entity == "workout_session":
+        workout_id = data.get("workout_id")
+        row.workout_template_id = require_domain_row(WorkoutTemplate, user_id, workout_id, "workout_id").id if workout_id else None
+        row.started_at = parsed_datetime(data.get("started_at"), now)
+        row.ended_at = parsed_datetime(data.get("ended_at"))
+        row.duration_seconds = data.get("duration_seconds")
+        row.rating = data.get("rating")
+        row.note = data.get("note")
+        row.percent_completed = data.get("percent_completed")
+        row.volume_weight = data.get("volume_weight")
+        row.average_rest_seconds = data.get("average_rest_seconds")
+        row.estimated_intensity = data.get("estimated_intensity")
+    elif entity == "session_exercise":
+        row.workout_session_id = require_domain_row(WorkoutSession, user_id, data.get("session_id"), "session_id").id
+        exercise_id = data.get("exercise_id")
+        row.exercise_id = require_domain_row(Exercise, user_id, exercise_id, "exercise_id").id if exercise_id else None
+        row.position = int(data.get("position", 0))
+        row.exercise_name = str(data.get("name") or "Untitled Exercise")[:160]
+        row.tracking_type = str(data.get("tracking_type") or "")[:80]
+        row.difficulty_type = str(data.get("difficulty_type") or "")[:80]
+        row.primary_muscle_name = str(data.get("primary_muscle_name") or "")[:120]
+        row.primary_muscle_color_hex = str(data.get("primary_muscle_color") or "")[:6]
+        row.target_rest_seconds = data.get("target_rest_seconds")
+    elif entity == "session_set":
+        row.session_exercise_id = require_domain_row(SessionExercise, user_id, data.get("session_exercise_id"), "session_exercise_id").id
+        row.set_number = int(data.get("number", 1))
+        row.completed = bool(data.get("completed", False))
+        row.completed_at = parsed_datetime(data.get("completed_at"))
+        row.is_warmup = bool(data.get("warmup", False))
+        row.reps = data.get("reps")
+        row.time_seconds = data.get("time_seconds")
+        row.distance = data.get("distance")
+        row.weight = data.get("weight")
+        row.pace = data.get("pace")
+
+
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -183,6 +541,8 @@ def send_code():
     if not user:
         user = User(email=email, password_hash=generate_password_hash(password))
         db.session.add(user)
+        db.session.flush()
+        seed_premade_domain_data(user)
 
     code = generate_code()
     user.verification_code_hash = digest(code)
@@ -319,10 +679,14 @@ def sync_data():
     now = datetime.now(timezone.utc)
     append_only = {"workout_session", "session_exercise", "session_set"}
     for change in changes:
+        if not isinstance(change, dict):
+            db.session.rollback()
+            return jsonify(error="Invalid sync change."), 400
         entity = str(change.get("entity", ""))
         client_uuid = str(change.get("client_uuid", ""))
         operation = str(change.get("operation", ""))
         if not entity or not client_uuid or operation not in {"upsert", "delete"}:
+            db.session.rollback()
             return jsonify(error="Invalid sync change."), 400
         record = db.session.execute(db.select(SyncRecord).filter_by(
             user_id=user.id, entity_type=entity, client_uuid=client_uuid
@@ -344,13 +708,22 @@ def sync_data():
             db.session.add(record)
         record.revision = user.sync_revision
         record.updated_at = now
-        if operation == "delete":
-            record.deleted_at = now
-            record.data = None
-        else:
-            # Server arrival order provides last-write-wins per independent record.
-            record.deleted_at = None
-            record.data = change.get("data") or {}
+        try:
+            if operation == "delete":
+                record.deleted_at = now
+                record.data = None
+                project_domain_delete(user.id, entity, client_uuid)
+            else:
+                data = change.get("data") or {}
+                if not isinstance(data, dict):
+                    raise DomainProjectionError("Sync data must be an object.")
+                # Server arrival order provides last-write-wins per independent record.
+                record.deleted_at = None
+                record.data = data
+                project_domain_upsert(user.id, entity, client_uuid, data, now)
+        except (DomainProjectionError, TypeError, ValueError) as error:
+            db.session.rollback()
+            return jsonify(error=str(error)), 400
         accepted.append({"entity": entity, "client_uuid": client_uuid, "revision": record.revision})
 
     remote = db.session.execute(

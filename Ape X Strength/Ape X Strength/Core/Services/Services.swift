@@ -60,9 +60,11 @@ final class UserDefaultsSettingsService: SettingsService {
 
 @MainActor
 protocol SyncService {
+    func hasPendingChanges() throws -> Bool
     func syncIfNeeded() async throws
 }
 
 struct NoOpSyncService: SyncService {
+    func hasPendingChanges() throws -> Bool { false }
     func syncIfNeeded() async throws { }
 }

@@ -31,6 +31,12 @@ struct RootTabView: View {
                 authenticationService: dependencies.authentication,
                 exerciseRepository: dependencies.exercises,
                 workoutRepository: dependencies.workouts,
+                hasPendingSyncChanges: {
+                    try dependencies.sync.hasPendingChanges()
+                },
+                syncData: {
+                    try await dependencies.sync.syncIfNeeded()
+                },
                 resetData: {
                     guard let authenticatedUser = dependencies.authentication.authenticatedUser else { return }
                     let user = try dependencies.persistence.initializeUser(authenticatedUser: authenticatedUser)

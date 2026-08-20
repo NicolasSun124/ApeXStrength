@@ -29,6 +29,13 @@ def test_authentication_flow():
         assert sent[0][2] == "verification"
         assert len(sent[0][1]) == 6 and sent[0][1].isdigit()
         verification_code = sent[0][1]
+        created_user = backend.db.session.execute(
+            backend.db.select(backend.User).filter_by(email="athlete@example.com")
+        ).scalar_one()
+        assert len(backend.db.session.execute(backend.db.select(backend.Muscle)).scalars().all()) == 22
+        assert len(backend.db.session.execute(
+            backend.db.select(backend.Tag).filter_by(user_id=created_user.id)
+        ).scalars().all()) == 22
 
         response = client.post(
             "/v1/auth/verify-code",
@@ -60,6 +67,8 @@ def test_authentication_flow():
         assert len(body["accepted"]) == 2
         records = backend.db.session.execute(backend.db.select(backend.SyncRecord)).scalars().all()
         assert {record.client_uuid for record in records} == {"exercise-1", "session-1"}
+        user = backend.db.session.execute(backend.db.select(backend.User).filter_by(email="athlete@example.com")).scalar_one()
+        assert backend.domain_row(backend.Exercise, user.id, "exercise-1").name == "Bench"
 
         # Sessions are append-only and a retry cannot overwrite history.
         retry = client.put("/v1/sync", headers={"Authorization": f"Bearer {token}"}, json={"cursor": 2, "changes": [
@@ -74,6 +83,7 @@ def test_authentication_flow():
             {"entity": "exercise", "operation": "delete", "client_uuid": "exercise-1", "data": {}}
         ]})
         assert deleted.status_code == 200
+        assert backend.domain_row(backend.Exercise, user.id, "exercise-1") is None
         resurrect = client.put("/v1/sync", headers={"Authorization": f"Bearer {token}"}, json={"cursor": 2, "changes": [
             {"entity": "exercise", "operation": "upsert", "client_uuid": "exercise-1", "data": {"name": "Old Bench"}}
         ]})
@@ -176,3 +186,74 @@ def test_sync_requires_authentication_and_complete_snapshot():
         backend.db.create_all()
         client = backend.app.test_client()
         assert client.put("/v1/sync", json={}).status_code == 401
+
+
+def test_sync_projects_changes_into_normalized_domain_tables():
+    backend.app.config.update(TESTING=True)
+    with backend.app.app_context():
+        backend.db.drop_all()
+        backend.db.create_all()
+        token = "normalized-sync-token"
+        user = backend.User(
+            email="normalized@example.com",
+            password_hash=backend.generate_password_hash("password123"),
+            email_verified=True,
+            session_token_hash=backend.digest(token),
+        )
+        backend.db.session.add(user)
+        backend.db.session.commit()
+        muscle_id = "a5c389af-0d22-4e73-83e8-bcc4b5c416d1"
+        changes = [
+            {"entity": "settings", "client_uuid": "settings", "operation": "upsert", "data": {
+                "weight_unit": "kg", "distance_unit": "km", "rest_timer_notifications_enabled": False,
+            }},
+            {"entity": "exercise", "client_uuid": "exercise-1", "operation": "upsert", "data": {
+                "name": "Bench Press", "created_at": "2026-08-20T12:00:00Z", "tracking_type": "reps|weighted",
+                "target_rest_seconds": 180, "primary_muscle_id": muscle_id,
+                "primary_muscle_name": "Chest", "primary_muscle_color": "FF0000",
+            }},
+            {"entity": "tag", "client_uuid": "tag-1", "operation": "upsert", "data": {"name": "Push"}},
+            {"entity": "workout", "client_uuid": "workout-1", "operation": "upsert", "data": {
+                "name": "Push Day", "created_at": "2026-08-20T12:00:00Z",
+                "updated_at": "2026-08-20T12:00:00Z", "tag_ids": ["tag-1"],
+            }},
+            {"entity": "template_exercise", "client_uuid": "template-exercise-1", "operation": "upsert", "data": {
+                "workout_id": "workout-1", "exercise_id": "exercise-1", "position": 0,
+            }},
+            {"entity": "template_set", "client_uuid": "template-set-1", "operation": "upsert", "data": {
+                "template_exercise_id": "template-exercise-1", "number": 1, "reps": 8, "weight": 100,
+            }},
+            {"entity": "workout_session", "client_uuid": "session-1", "operation": "upsert", "data": {
+                "workout_id": "workout-1", "started_at": "2026-08-20T13:00:00Z", "rating": 5,
+            }},
+            {"entity": "session_exercise", "client_uuid": "session-exercise-1", "operation": "upsert", "data": {
+                "session_id": "session-1", "exercise_id": "exercise-1", "position": 0, "name": "Bench Press",
+                "tracking_type": "reps", "difficulty_type": "weighted", "primary_muscle_name": "Chest",
+                "primary_muscle_color": "FF0000", "target_rest_seconds": 180,
+            }},
+            {"entity": "session_set", "client_uuid": "session-set-1", "operation": "upsert", "data": {
+                "session_exercise_id": "session-exercise-1", "number": 1, "completed": True,
+                "completed_at": "2026-08-20T13:05:00Z", "reps": 8, "weight": 100,
+            }},
+        ]
+        response = backend.app.test_client().put(
+            "/v1/sync", headers={"Authorization": f"Bearer {token}"}, json={"cursor": 0, "changes": changes},
+        )
+        assert response.status_code == 200
+        assert backend.db.session.get(backend.UserSettings, user.id).weight_unit == "kg"
+        exercise = backend.domain_row(backend.Exercise, user.id, "exercise-1")
+        assert exercise.name == "Bench Press"
+        assert exercise.primary_muscle_id == backend.uuid.UUID(muscle_id)
+        workout = backend.domain_row(backend.WorkoutTemplate, user.id, "workout-1")
+        assert [tag.name for tag in workout.tags] == ["Push"]
+        assert backend.domain_row(backend.TemplateSet, user.id, "template-set-1").planned_reps == 8
+        assert backend.domain_row(backend.WorkoutSession, user.id, "session-1").rating == 5
+        assert backend.domain_row(backend.SessionSet, user.id, "session-set-1").completed is True
+
+        update = backend.app.test_client().put(
+            "/v1/sync", headers={"Authorization": f"Bearer {token}"}, json={"cursor": 9, "changes": [{
+                "entity": "tag", "client_uuid": "tag-1", "operation": "upsert", "data": {"name": "Upper Body"},
+            }]},
+        )
+        assert update.status_code == 200
+        assert backend.domain_row(backend.Tag, user.id, "tag-1").name == "Upper Body"
