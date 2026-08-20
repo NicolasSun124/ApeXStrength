@@ -6,6 +6,8 @@ final class EmailAuthenticationViewModel: ObservableObject {
         case login
         case signup
         case verification
+        case passwordResetRequest
+        case passwordResetConfirmation
         case profile
         case authenticated
     }
@@ -14,6 +16,8 @@ final class EmailAuthenticationViewModel: ObservableObject {
     @Published var password = ""
     @Published var verificationCode = ""
     @Published var name = ""
+    @Published var newPassword = ""
+    @Published var passwordResetSucceeded = false
     @Published private(set) var step: Step
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
@@ -94,6 +98,44 @@ final class EmailAuthenticationViewModel: ObservableObject {
         }
     }
 
+    func showPasswordReset() {
+        password = ""
+        verificationCode = ""
+        errorMessage = nil
+        passwordResetSucceeded = false
+        step = .passwordResetRequest
+    }
+
+    func requestPasswordReset() async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            try await service.requestPasswordReset(for: email)
+            step = .passwordResetConfirmation
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    func resetPassword() async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            try await service.resetPassword(email: email, code: verificationCode, newPassword: newPassword)
+            password = ""
+            newPassword = ""
+            verificationCode = ""
+            passwordResetSucceeded = true
+            step = .login
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     func editCredentials() {
         verificationCode = ""
         errorMessage = nil
@@ -143,6 +185,10 @@ struct AuthenticationGateView: View {
                 signupView
             case .verification:
                 verificationView
+            case .passwordResetRequest:
+                passwordResetRequestView
+            case .passwordResetConfirmation:
+                passwordResetConfirmationView
             case .profile:
                 profileView
             case .authenticated:
@@ -168,6 +214,13 @@ struct AuthenticationGateView: View {
 
             credentialsFields
 
+            if viewModel.passwordResetSucceeded {
+                Text("Password updated. Log in with your new password.")
+                    .font(.apeCaption)
+                    .foregroundStyle(ApeColor.primary)
+                    .multilineTextAlignment(.center)
+            }
+
             errorText
 
             Button {
@@ -178,6 +231,13 @@ struct AuthenticationGateView: View {
             .buttonStyle(ApePrimaryButtonStyle())
             .disabled(viewModel.isLoading)
             .accessibilityIdentifier("loginButton")
+
+            Button("Forgot password?") {
+                viewModel.showPasswordReset()
+            }
+            .font(.apeCallout)
+            .foregroundStyle(ApeColor.primary)
+            .accessibilityIdentifier("forgotPasswordButton")
 
             Button("Don't have an account? Sign up") {
                 viewModel.showSignup()
@@ -269,6 +329,79 @@ struct AuthenticationGateView: View {
             }
             .font(.apeCallout)
             .foregroundStyle(ApeColor.primary)
+        }
+    }
+
+    private var passwordResetRequestView: some View {
+        authenticationContainer {
+            Text("Reset password")
+                .font(.apeLargeTitle)
+                .foregroundStyle(ApeColor.textPrimary)
+
+            Text("Enter your email and we'll send you a 6-digit reset code.")
+                .font(.apeBody)
+                .foregroundStyle(ApeColor.textSecondary)
+                .multilineTextAlignment(.center)
+
+            TextField("Email address", text: $viewModel.email)
+                .textFieldStyle(ApeTextFieldStyle())
+                .textContentType(.emailAddress)
+                .keyboardType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            errorText
+
+            Button {
+                Task { await viewModel.requestPasswordReset() }
+            } label: {
+                loadingLabel("Send reset code")
+            }
+            .buttonStyle(ApePrimaryButtonStyle())
+            .disabled(viewModel.isLoading)
+            .accessibilityIdentifier("sendPasswordResetCodeButton")
+
+            Button("Back to log in") { viewModel.showLogin() }
+                .font(.apeCallout)
+                .foregroundStyle(ApeColor.primary)
+        }
+    }
+
+    private var passwordResetConfirmationView: some View {
+        authenticationContainer {
+            Text("Choose a new password")
+                .font(.apeLargeTitle)
+                .foregroundStyle(ApeColor.textPrimary)
+                .multilineTextAlignment(.center)
+
+            Text("If an account exists for \(viewModel.email), a 6-digit code was sent. It expires in 10 minutes.")
+                .font(.apeBody)
+                .foregroundStyle(ApeColor.textSecondary)
+                .multilineTextAlignment(.center)
+
+            TextField("Reset code", text: $viewModel.verificationCode)
+                .textFieldStyle(ApeTextFieldStyle())
+                .textContentType(.oneTimeCode)
+                .keyboardType(.numberPad)
+
+            SecureField("New password", text: $viewModel.newPassword)
+                .textFieldStyle(ApeTextFieldStyle())
+                .textContentType(.newPassword)
+
+            errorText
+
+            Button {
+                Task { await viewModel.resetPassword() }
+            } label: {
+                loadingLabel("Update password")
+            }
+            .buttonStyle(ApePrimaryButtonStyle())
+            .disabled(viewModel.isLoading || viewModel.verificationCode.count != 6 || viewModel.newPassword.count < 8)
+            .accessibilityIdentifier("resetPasswordButton")
+
+            Button("Request another code") { viewModel.showPasswordReset() }
+                .font(.apeCallout)
+                .foregroundStyle(ApeColor.primary)
         }
     }
 

@@ -115,6 +115,34 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
         try store(response)
     }
 
+    func requestPasswordReset(for email: String) async throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedEmail.contains("@"), normalizedEmail.contains(".") else {
+            throw EmailAuthenticationError.invalidEmail
+        }
+        let request = try makeRequest(
+            path: "auth/request-password-reset",
+            method: "POST",
+            body: PasswordResetRequest(email: normalizedEmail)
+        )
+        _ = try await perform(request)
+    }
+
+    func resetPassword(email: String, code: String, newPassword: String) async throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard newPassword.count >= 8 else { throw EmailAuthenticationError.weakPassword }
+        let request = try makeRequest(
+            path: "auth/reset-password",
+            method: "POST",
+            body: PasswordResetConfirmationRequest(
+                email: normalizedEmail,
+                code: code.trimmingCharacters(in: .whitespacesAndNewlines),
+                password: newPassword
+            )
+        )
+        _ = try await perform(request)
+    }
+
     func completeProfile(name: String) async throws {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { throw EmailAuthenticationError.invalidName }
@@ -197,6 +225,16 @@ private struct CredentialsRequest: Encodable {
 private struct VerificationRequest: Encodable {
     let email: String
     let code: String
+}
+
+private struct PasswordResetRequest: Encodable {
+    let email: String
+}
+
+private struct PasswordResetConfirmationRequest: Encodable {
+    let email: String
+    let code: String
+    let password: String
 }
 
 private struct ProfileRequest: Encodable {

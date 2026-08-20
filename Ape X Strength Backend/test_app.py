@@ -9,7 +9,7 @@ def test_authentication_flow():
     sent = []
     backend.app.config.update(
         TESTING=True,
-        CODE_SENDER=lambda email, code: sent.append((email, code)),
+        CODE_SENDER=lambda email, code, purpose: sent.append((email, code, purpose)),
     )
 
     with backend.app.app_context():
@@ -24,11 +24,15 @@ def test_authentication_flow():
             json={"email": "athlete@example.com", "password": "password123"},
         )
         assert response.status_code == 204
-        assert sent == [("athlete@example.com", "123456")]
+        assert len(sent) == 1
+        assert sent[0][0] == "athlete@example.com"
+        assert sent[0][2] == "verification"
+        assert len(sent[0][1]) == 6 and sent[0][1].isdigit()
+        verification_code = sent[0][1]
 
         response = client.post(
             "/v1/auth/verify-code",
-            json={"email": "athlete@example.com", "code": "123456"},
+            json={"email": "athlete@example.com", "code": verification_code},
         )
         assert response.status_code == 200
         token = response.get_json()["token"]
@@ -102,6 +106,67 @@ def test_authentication_flow():
             json={"name": "Logged In Athlete"},
         )
         assert response.status_code == 200
+
+
+def test_password_reset_flow_uses_random_single_use_code_and_revokes_session():
+    sent = []
+    backend.app.config.update(
+        TESTING=True,
+        CODE_SENDER=lambda email, code, purpose: sent.append((email, code, purpose)),
+    )
+    with backend.app.app_context():
+        backend.db.drop_all()
+        backend.db.create_all()
+        user = backend.User(
+            email="athlete@example.com",
+            password_hash=backend.generate_password_hash("password123"),
+            email_verified=True,
+        )
+        backend.db.session.add(user)
+        backend.db.session.commit()
+        client = backend.app.test_client()
+
+        login = client.post(
+            "/v1/auth/login",
+            json={"email": "athlete@example.com", "password": "password123"},
+        )
+        old_token = login.get_json()["token"]
+        response = client.post(
+            "/v1/auth/request-password-reset",
+            json={"email": "athlete@example.com"},
+        )
+        assert response.status_code == 200
+        assert sent[-1][0] == "athlete@example.com"
+        assert sent[-1][2] == "password_reset"
+        reset_code = sent[-1][1]
+        assert reset_code.isdigit() and len(reset_code) == 6
+
+        response = client.post(
+            "/v1/auth/reset-password",
+            json={"email": "athlete@example.com", "code": reset_code, "password": "newpassword123"},
+        )
+        assert response.status_code == 204
+        assert client.post(
+            "/v1/auth/reset-password",
+            json={"email": "athlete@example.com", "code": reset_code, "password": "anotherpassword"},
+        ).status_code == 400
+        assert client.patch(
+            "/v1/profile",
+            headers={"Authorization": f"Bearer {old_token}"},
+            json={"name": "Should Fail"},
+        ).status_code == 401
+        assert client.post(
+            "/v1/auth/login",
+            json={"email": "athlete@example.com", "password": "newpassword123"},
+        ).status_code == 200
+
+        sent_count = len(sent)
+        response = client.post(
+            "/v1/auth/request-password-reset",
+            json={"email": "unknown@example.com"},
+        )
+        assert response.status_code == 200
+        assert len(sent) == sent_count
 
 
 def test_sync_requires_authentication_and_complete_snapshot():

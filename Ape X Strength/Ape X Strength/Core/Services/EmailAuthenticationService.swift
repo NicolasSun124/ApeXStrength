@@ -48,6 +48,8 @@ protocol EmailAuthenticationService: AnyObject {
     func logIn(email: String, password: String) async throws
     func sendVerificationCode(to email: String, password: String) async throws
     func verify(code: String, for email: String) async throws
+    func requestPasswordReset(for email: String) async throws
+    func resetPassword(email: String, code: String, newPassword: String) async throws
     func completeProfile(name: String) async throws
     func signOut() async
 }
@@ -137,6 +139,21 @@ final class TestEmailAuthenticationService: EmailAuthenticationService {
         defaults.set(normalizedEmail, forKey: emailKey)
         defaults.set(true, forKey: emailVerifiedKey)
         defaults.set(false, forKey: sessionKey)
+    }
+
+    func requestPasswordReset(for email: String) async throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedEmail.contains("@"), normalizedEmail.contains(".") else {
+            throw EmailAuthenticationError.invalidEmail
+        }
+        pendingCodes[normalizedEmail] = "123456"
+    }
+
+    func resetPassword(email: String, code: String, newPassword: String) async throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard newPassword.count >= 8 else { throw EmailAuthenticationError.weakPassword }
+        guard pendingCodes[normalizedEmail] == code else { throw EmailAuthenticationError.invalidCode }
+        pendingCodes[normalizedEmail] = nil
     }
 
     func completeProfile(name: String) async throws {

@@ -3,6 +3,9 @@ import os
 import secrets
 import smtplib
 import uuid
+import json
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
@@ -18,12 +21,16 @@ app.config.update(
         "DATABASE_URL", "postgresql+psycopg://nicolassun:dba_pass_123@127.0.0.1:5432/apexstrength"
     ),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    VERIFICATION_CODE=os.getenv("VERIFICATION_CODE", "123456"),
-    SMTP_HOST=os.getenv("SMTP_HOST"),
-    SMTP_PORT=int(os.getenv("SMTP_PORT", "587")),
+    APP_ENV=os.getenv("APP_ENV", "development").lower(),
+    EMAIL_TRANSPORT=os.getenv("EMAIL_TRANSPORT"),
+    SMTP_HOST=os.getenv("SMTP_HOST", "127.0.0.1"),
+    SMTP_PORT=int(os.getenv("SMTP_PORT", "1025")),
     SMTP_USERNAME=os.getenv("SMTP_USERNAME"),
     SMTP_PASSWORD=os.getenv("SMTP_PASSWORD"),
-    SMTP_FROM_EMAIL=os.getenv("SMTP_FROM_EMAIL"),
+    EMAIL_FROM_EMAIL=os.getenv("EMAIL_FROM_EMAIL", "no-reply@apexstrength.local"),
+    EMAIL_FROM_NAME=os.getenv("EMAIL_FROM_NAME", "Ape X Strength"),
+    BREVO_API_KEY=os.getenv("BREVO_API_KEY"),
+    BREVO_API_URL=os.getenv("BREVO_API_URL", "https://api.brevo.com/v3/smtp/email"),
 )
 db = SQLAlchemy(app)
 
@@ -36,6 +43,8 @@ class User(db.Model):
     password_hash = db.Column(db.Text, nullable=False)
     verification_code_hash = db.Column(db.String(64))
     verification_code_expires_at = db.Column(db.DateTime(timezone=True))
+    password_reset_code_hash = db.Column(db.String(64))
+    password_reset_code_expires_at = db.Column(db.DateTime(timezone=True))
     email_verified = db.Column(db.Boolean, nullable=False, default=False)
     name = db.Column(db.String(120))
     session_token_hash = db.Column(db.String(64), unique=True)
@@ -78,24 +87,74 @@ def authenticated_user():
     return db.session.execute(db.select(User).filter_by(session_token_hash=digest(token))).scalar_one_or_none()
 
 
-def send_email(email, code):
+def generate_code():
+    """Return a cryptographically secure, zero-padded six-digit code."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def email_content(purpose, code):
+    if purpose == "password_reset":
+        return (
+            "Reset your Ape X Strength password",
+            f"Your password reset code is {code}. It expires in 10 minutes. "
+            "If you did not request this, you can ignore this email.",
+        )
+    return (
+        "Verify your Ape X Strength email",
+        f"Your email verification code is {code}. It expires in 10 minutes.",
+    )
+
+
+def send_email(email, code, purpose):
     sender = app.config.get("CODE_SENDER")
     if sender:
-        sender(email, code)
+        sender(email, code, purpose)
         return
 
-    host = app.config.get("SMTP_HOST")
-    from_email = app.config.get("SMTP_FROM_EMAIL")
-    if not host or not from_email:
-        return  # Local prototype mode: use VERIFICATION_CODE=123456.
+    subject, content = email_content(purpose, code)
+    transport = app.config.get("EMAIL_TRANSPORT") or (
+        "brevo" if app.config["APP_ENV"] == "production" else "mailpit"
+    )
+    if transport == "brevo":
+        api_key = app.config.get("BREVO_API_KEY")
+        if not api_key:
+            raise RuntimeError("BREVO_API_KEY is required in production.")
+        payload = json.dumps({
+            "sender": {
+                "email": app.config["EMAIL_FROM_EMAIL"],
+                "name": app.config["EMAIL_FROM_NAME"],
+            },
+            "to": [{"email": email}],
+            "subject": subject,
+            "textContent": content,
+        }).encode()
+        brevo_request = urllib.request.Request(
+            app.config["BREVO_API_URL"],
+            data=payload,
+            headers={
+                "api-key": api_key,
+                "accept": "application/json",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(brevo_request, timeout=10) as response:
+                if response.status != 201:
+                    raise RuntimeError(f"Brevo returned HTTP {response.status}.")
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(f"Brevo returned HTTP {error.code}.") from error
+        return
+
+    if transport != "mailpit":
+        raise RuntimeError(f"Unsupported EMAIL_TRANSPORT: {transport}")
 
     message = EmailMessage()
-    message["Subject"] = "Your Ape X Strength verification code"
-    message["From"] = from_email
+    message["Subject"] = subject
+    message["From"] = f'{app.config["EMAIL_FROM_NAME"]} <{app.config["EMAIL_FROM_EMAIL"]}>'
     message["To"] = email
-    message.set_content(f"Your verification code is {code}. It expires in 10 minutes.")
-    with smtplib.SMTP(host, app.config["SMTP_PORT"], timeout=10) as smtp:
-        smtp.starttls()
+    message.set_content(content)
+    with smtplib.SMTP(app.config["SMTP_HOST"], app.config["SMTP_PORT"], timeout=10) as smtp:
         if app.config.get("SMTP_USERNAME"):
             smtp.login(app.config["SMTP_USERNAME"], app.config.get("SMTP_PASSWORD", ""))
         smtp.send_message(message)
@@ -125,10 +184,10 @@ def send_code():
         user = User(email=email, password_hash=generate_password_hash(password))
         db.session.add(user)
 
-    code = app.config["VERIFICATION_CODE"]
+    code = generate_code()
     user.verification_code_hash = digest(code)
     user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    send_email(email, code)
+    send_email(email, code, "verification")
     db.session.commit()
     return "", 204
 
@@ -148,6 +207,50 @@ def login():
     user.session_token_hash = digest(token)
     db.session.commit()
     return jsonify(token=token, user=user.json())
+
+
+@app.post("/v1/auth/request-password-reset")
+def request_password_reset():
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email", "")).strip().lower()
+    if "@" not in email:
+        return jsonify(error="Enter a valid email address."), 400
+
+    user = db.session.execute(db.select(User).filter_by(email=email)).scalar_one_or_none()
+    if user and user.email_verified:
+        code = generate_code()
+        user.password_reset_code_hash = digest(code)
+        user.password_reset_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        send_email(email, code, "password_reset")
+        db.session.commit()
+
+    # Deliberately identical for known and unknown addresses to prevent enumeration.
+    return jsonify(message="If an account exists for that email, a reset code has been sent."), 200
+
+
+@app.post("/v1/auth/reset-password")
+def reset_password():
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email", "")).strip().lower()
+    code = str(data.get("code", "")).strip()
+    password = str(data.get("password", ""))
+    if len(password) < 8:
+        return jsonify(error="Password must contain at least 8 characters."), 400
+
+    user = db.session.execute(db.select(User).filter_by(email=email)).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    expires_at = user.password_reset_code_expires_at if user else None
+    if expires_at and expires_at.tzinfo is None:
+        now = now.replace(tzinfo=None)
+    if not user or not expires_at or expires_at <= now or user.password_reset_code_hash != digest(code):
+        return jsonify(error="Invalid or expired password reset code."), 400
+
+    user.password_hash = generate_password_hash(password)
+    user.password_reset_code_hash = None
+    user.password_reset_code_expires_at = None
+    user.session_token_hash = None
+    db.session.commit()
+    return "", 204
 
 
 @app.post("/v1/auth/verify-code")

@@ -4,6 +4,8 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL,
     verification_code_hash VARCHAR(64),
     verification_code_expires_at TIMESTAMPTZ,
+    password_reset_code_hash VARCHAR(64),
+    password_reset_code_expires_at TIMESTAMPTZ,
     email_verified BOOLEAN NOT NULL DEFAULT FALSE,
     name VARCHAR(120),
     session_token_hash VARCHAR(64) UNIQUE,
