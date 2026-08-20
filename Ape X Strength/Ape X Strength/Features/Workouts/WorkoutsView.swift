@@ -96,6 +96,10 @@ struct WorkoutsView: View {
             viewModel.detectActiveSessionDraft()
             isShowingDraftPrompt = viewModel.activeSessionDraft != nil
         }
+        .onReceive(NotificationCenter.default.publisher(for: .appDataDidSync)) { _ in
+            viewModel.load()
+            viewModel.detectActiveSessionDraft()
+        }
     }
 
     private var workoutList: some View {

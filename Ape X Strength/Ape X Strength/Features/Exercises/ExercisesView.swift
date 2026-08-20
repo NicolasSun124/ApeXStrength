@@ -57,6 +57,9 @@ struct ExercisesView: View {
             }
         }
         .task { if viewModel.state == .idle { viewModel.load() } }
+        .onReceive(NotificationCenter.default.publisher(for: .appDataDidSync)) { _ in
+            viewModel.load()
+        }
     }
 
     private var exerciseList: some View {

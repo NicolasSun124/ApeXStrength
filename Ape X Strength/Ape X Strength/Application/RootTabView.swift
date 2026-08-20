@@ -51,7 +51,19 @@ struct RootTabView: View {
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarColorScheme(.dark, for: .tabBar)
         .preferredColorScheme(.dark)
+        .task {
+            do {
+                try await dependencies.sync.syncIfNeeded()
+                NotificationCenter.default.post(name: .appDataDidSync, object: nil)
+            } catch {
+                // The local database remains available while a later change retries sync.
+            }
+        }
     }
+}
+
+extension Notification.Name {
+    static let appDataDidSync = Notification.Name("appDataDidSync")
 }
 
 struct RootTabView_Previews: PreviewProvider {
