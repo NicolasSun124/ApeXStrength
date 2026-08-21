@@ -139,6 +139,15 @@ struct PersistenceController {
     }
 
     @MainActor
+    func deleteUser(_ user: User) throws {
+        let context = container.viewContext
+        context.delete(user)
+        if context.hasChanges {
+            try context.save()
+        }
+    }
+
+    @MainActor
     static let preview: PersistenceController = {
         let persistence = PersistenceController(inMemory: true)
         let context = persistence.container.viewContext

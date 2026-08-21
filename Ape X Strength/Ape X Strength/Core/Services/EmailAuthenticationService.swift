@@ -179,7 +179,7 @@ final class TestEmailAuthenticationService: EmailAuthenticationService {
     }
 
     func deleteAccount() async throws {
-        clearSession()
+        // The app coordinator clears the local user before signing out.
     }
 
     func resetData() async throws { }

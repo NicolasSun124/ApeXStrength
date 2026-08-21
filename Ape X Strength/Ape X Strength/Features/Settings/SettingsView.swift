@@ -10,6 +10,7 @@ struct SettingsView: View {
     private let hasPendingSyncChanges: () throws -> Bool
     private let syncData: () async throws -> Void
     private let resetData: () async throws -> Void
+    private let deleteAccount: () async throws -> Void
     @State private var syncStatus: SyncStatus = .ready
     @State private var isShowingSyncConfirmation = false
     @State private var isShowingSyncError = false
@@ -25,7 +26,8 @@ struct SettingsView: View {
         workoutRepository: any WorkoutRepository,
         hasPendingSyncChanges: @escaping () throws -> Bool,
         syncData: @escaping () async throws -> Void,
-        resetData: @escaping () async throws -> Void
+        resetData: @escaping () async throws -> Void,
+        deleteAccount: @escaping () async throws -> Void
     ) {
         _viewModel = StateObject(wrappedValue: viewModel())
         self.authenticationService = authenticationService
@@ -34,6 +36,7 @@ struct SettingsView: View {
         self.hasPendingSyncChanges = hasPendingSyncChanges
         self.syncData = syncData
         self.resetData = resetData
+        self.deleteAccount = deleteAccount
     }
 
     var body: some View {
@@ -234,7 +237,7 @@ struct SettingsView: View {
                 .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $isShowingDeleteAccountConfirmation) {
-                DeleteAccountConfirmationView(authenticationService: authenticationService)
+                DeleteAccountConfirmationView(deleteAccount: deleteAccount)
                     .presentationDetents([.medium])
                     .presentationDragIndicator(.visible)
             }
@@ -818,7 +821,7 @@ private struct DeleteAccountConfirmationView: View {
     @State private var confirmationText = ""
     @State private var errorMessage: String?
     @State private var isDeleting = false
-    let authenticationService: any EmailAuthenticationService
+    let deleteAccount: () async throws -> Void
 
     private var isConfirmed: Bool {
         confirmationText == "DELETE ACCOUNT"
@@ -887,7 +890,7 @@ private struct DeleteAccountConfirmationView: View {
         isDeleting = true
         errorMessage = nil
         do {
-            try await authenticationService.deleteAccount()
+            try await deleteAccount()
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             isDeleting = false

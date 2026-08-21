@@ -42,6 +42,18 @@ struct RootTabView: View {
                     let user = try dependencies.persistence.initializeUser(authenticatedUser: authenticatedUser)
                     try await dependencies.authentication.resetData()
                     try dependencies.persistence.resetUserData(for: user)
+                },
+                deleteAccount: {
+                    guard let authenticatedUser = dependencies.authentication.authenticatedUser else { return }
+                    let user = try dependencies.persistence.initializeUser(authenticatedUser: authenticatedUser)
+                    try await dependencies.authentication.deleteAccount()
+                    do {
+                        try dependencies.persistence.deleteUser(user)
+                    } catch {
+                        await dependencies.authentication.signOut()
+                        throw error
+                    }
+                    await dependencies.authentication.signOut()
                 }
             )
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }

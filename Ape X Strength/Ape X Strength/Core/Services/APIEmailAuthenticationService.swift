@@ -191,7 +191,6 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
         request.httpMethod = "DELETE"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         _ = try await perform(request)
-        clearSession()
     }
 
     func resetData() async throws {
