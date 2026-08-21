@@ -31,6 +31,7 @@ struct Ape_X_StrengthApp: App {
                 .environment(\.managedObjectContext, dependencies.persistence.container.viewContext)
                 .environmentObject(sessionRecoveryCoordinator)
                 .tint(ApeColor.primary)
+                .keyboardDoneButton()
         }
     }
 }

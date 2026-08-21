@@ -1,4 +1,33 @@
 import SwiftUI
+import UIKit
+
+private struct KeyboardDoneButton: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        UIApplication.shared.sendAction(
+                            #selector(UIResponder.resignFirstResponder),
+                            to: nil,
+                            from: nil,
+                            for: nil
+                        )
+                    }
+                    .accessibilityIdentifier("keyboardDoneButton")
+                }
+            }
+    }
+}
+
+extension View {
+    /// Adds an explicit way to dismiss the keyboard for every kind of text input,
+    /// including number and decimal pads that do not provide a return key.
+    func keyboardDoneButton() -> some View {
+        modifier(KeyboardDoneButton())
+    }
+}
 
 struct ApePrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {

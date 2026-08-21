@@ -12,8 +12,6 @@ struct SettingsView: View {
     private let resetData: () async throws -> Void
     private let deleteAccount: () async throws -> Void
     @State private var syncStatus: SyncStatus = .ready
-    @State private var isShowingSyncConfirmation = false
-    @State private var isShowingSyncError = false
     @State private var isShowingResetConfirmation = false
     @State private var isShowingDeleteAccountConfirmation = false
     @State private var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
@@ -48,7 +46,7 @@ struct SettingsView: View {
                             authenticationService: authenticationService,
                             syncStatus: $syncStatus,
                             refreshSyncStatus: refreshSyncStatus,
-                            requestSync: { isShowingSyncConfirmation = true }
+                            syncData: syncData
                         )
                     } label: {
                         ApeCard {
@@ -218,17 +216,6 @@ struct SettingsView: View {
             .toolbarBackground(ApeColor.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
-            .alert("Sync your data?", isPresented: $isShowingSyncConfirmation) {
-                Button("No", role: .cancel) { }
-                Button("Yes") { synchronizeData() }
-            } message: {
-                Text("Your latest data will be uploaded and changes from your account will be downloaded.")
-            }
-            .alert("Sync Failed", isPresented: $isShowingSyncError) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(syncStatus.message)
-            }
             .sheet(isPresented: $isShowingResetConfirmation) {
                 ResetDataConfirmationView {
                     try await resetData()
@@ -302,19 +289,6 @@ struct SettingsView: View {
         authenticationService.authenticatedUser?.isEmailVerified == true
             ? ApeColor.success
             : ApeColor.warning
-    }
-
-    private func synchronizeData() {
-        syncStatus = .syncing
-        Task {
-            do {
-                try await syncData()
-                syncStatus = .synced
-            } catch {
-                syncStatus = .failed(error.localizedDescription)
-                isShowingSyncError = true
-            }
-        }
     }
 
     private func refreshSyncStatus() {
@@ -399,9 +373,11 @@ private struct AccountSettingsView: View {
     let authenticationService: any EmailAuthenticationService
     @Binding var syncStatus: SyncStatus
     let refreshSyncStatus: () -> Void
-    let requestSync: () -> Void
+    let syncData: () async throws -> Void
     @State private var isShowingPasswordReset = false
     @State private var isShowingSignOutConfirmation = false
+    @State private var isShowingSyncConfirmation = false
+    @State private var isShowingSyncError = false
 
     private var user: AuthenticatedUser? {
         authenticationService.authenticatedUser
@@ -436,7 +412,9 @@ private struct AccountSettingsView: View {
                     .frame(maxWidth: .infinity)
                 }
 
-                Button(action: requestSync) {
+                Button {
+                    isShowingSyncConfirmation = true
+                } label: {
                     SyncStatusCard(status: syncStatus)
                 }
                 .buttonStyle(.plain)
@@ -479,6 +457,17 @@ private struct AccountSettingsView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .onAppear(perform: refreshSyncStatus)
+        .alert("Sync your data?", isPresented: $isShowingSyncConfirmation) {
+            Button("No", role: .cancel) { }
+            Button("Yes") { synchronizeData() }
+        } message: {
+            Text("Your latest data will be uploaded and changes from your account will be downloaded.")
+        }
+        .alert("Sync Failed", isPresented: $isShowingSyncError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(syncStatus.message)
+        }
         .sheet(isPresented: $isShowingPasswordReset) {
             SettingsPasswordResetView(
                 email: user?.email ?? "",
@@ -497,6 +486,19 @@ private struct AccountSettingsView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Your training data will remain on this device.")
+        }
+    }
+
+    private func synchronizeData() {
+        syncStatus = .syncing
+        Task {
+            do {
+                try await syncData()
+                syncStatus = .synced
+            } catch {
+                syncStatus = .failed(error.localizedDescription)
+                isShowingSyncError = true
+            }
         }
     }
 
