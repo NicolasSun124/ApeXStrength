@@ -51,6 +51,8 @@ protocol EmailAuthenticationService: AnyObject {
     func requestPasswordReset(for email: String) async throws
     func resetPassword(email: String, code: String, newPassword: String) async throws
     func completeProfile(name: String) async throws
+    func resetData() async throws
+    func deleteAccount() async throws
     func signOut() async
 }
 
@@ -173,6 +175,16 @@ final class TestEmailAuthenticationService: EmailAuthenticationService {
     }
 
     func signOut() async {
+        clearSession()
+    }
+
+    func deleteAccount() async throws {
+        clearSession()
+    }
+
+    func resetData() async throws { }
+
+    private func clearSession() {
         defaults.removeObject(forKey: sessionKey)
         defaults.removeObject(forKey: emailKey)
         defaults.removeObject(forKey: nameKey)

@@ -179,6 +179,102 @@ def test_password_reset_flow_uses_random_single_use_code_and_revokes_session():
         assert len(sent) == sent_count
 
 
+def test_delete_account_requires_authentication_and_removes_user():
+    backend.app.config.update(TESTING=True)
+    with backend.app.app_context():
+        backend.db.drop_all()
+        backend.db.create_all()
+        token = "delete-account-token"
+        user = backend.User(
+            email="delete@example.com",
+            password_hash=backend.generate_password_hash("password123"),
+            email_verified=True,
+            session_token_hash=backend.digest(token),
+        )
+        backend.db.session.add(user)
+        backend.db.session.commit()
+        client = backend.app.test_client()
+
+        assert client.delete("/v1/account").status_code == 401
+        response = client.delete(
+            "/v1/account",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 204
+        assert backend.db.session.execute(
+            backend.db.select(backend.User).filter_by(email="delete@example.com")
+        ).scalar_one_or_none() is None
+        assert client.patch(
+            "/v1/profile",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": "Should Fail"},
+        ).status_code == 401
+
+
+def test_reset_data_only_deletes_the_authenticated_users_records():
+    backend.app.config.update(TESTING=True)
+    with backend.app.app_context():
+        backend.db.drop_all()
+        backend.db.create_all()
+        target_token = "target-reset-token"
+        other_token = "other-user-token"
+        target = backend.User(
+            email="target@example.com",
+            password_hash=backend.generate_password_hash("password123"),
+            email_verified=True,
+            session_token_hash=backend.digest(target_token),
+            sync_revision=1,
+        )
+        other = backend.User(
+            email="other@example.com",
+            password_hash=backend.generate_password_hash("password123"),
+            email_verified=True,
+            session_token_hash=backend.digest(other_token),
+            sync_revision=1,
+        )
+        backend.db.session.add_all([target, other])
+        backend.db.session.flush()
+        now = backend.datetime.now(backend.timezone.utc)
+        target_tag = backend.Tag(user_id=target.id, client_uuid="target-tag", name="Target")
+        other_tag = backend.Tag(user_id=other.id, client_uuid="other-tag", name="Other")
+        target_record = backend.SyncRecord(
+            user_id=target.id, entity_type="tag", client_uuid="target-tag",
+            data={"name": "Target"}, revision=1, updated_at=now,
+        )
+        other_record = backend.SyncRecord(
+            user_id=other.id, entity_type="tag", client_uuid="other-tag",
+            data={"name": "Other"}, revision=1, updated_at=now,
+        )
+        backend.db.session.add_all([target_tag, other_tag, target_record, other_record])
+        backend.db.session.commit()
+        client = backend.app.test_client()
+
+        assert client.delete("/v1/data").status_code == 401
+        response = client.delete(
+            "/v1/data",
+            headers={"Authorization": f"Bearer {target_token}"},
+        )
+        assert response.status_code == 204
+        assert backend.db.session.execute(
+            backend.db.select(backend.Tag).filter_by(user_id=target.id)
+        ).scalars().all() == []
+        assert backend.db.session.execute(
+            backend.db.select(backend.SyncRecord).filter_by(user_id=target.id)
+        ).scalars().all() == []
+        assert len(backend.db.session.execute(
+            backend.db.select(backend.Tag).filter_by(user_id=other.id)
+        ).scalars().all()) == 1
+        assert len(backend.db.session.execute(
+            backend.db.select(backend.SyncRecord).filter_by(user_id=other.id)
+        ).scalars().all()) == 1
+        assert backend.db.session.get(backend.User, target.id).sync_revision == 0
+        assert client.patch(
+            "/v1/profile",
+            headers={"Authorization": f"Bearer {target_token}"},
+            json={"name": "Still Signed In"},
+        ).status_code == 200
+
+
 def test_sync_requires_authentication_and_complete_snapshot():
     backend.app.config.update(TESTING=True)
     with backend.app.app_context():

@@ -58,6 +58,8 @@ Endpoints:
 - `POST /v1/auth/request-password-reset` with `email`
 - `POST /v1/auth/reset-password` with `email`, `code`, and `password`
 - `POST /v1/auth/sign-out` with a bearer token
+- `DELETE /v1/account` with a bearer token
+- `DELETE /v1/data` with a bearer token to reset the authenticated user's training data
 - `PATCH /v1/profile` with a bearer token and `name`
 - `PUT /v1/sync` with a bearer token, cursor, and incremental record changes. The response includes acknowledgements, conflicts, and server changes after the cursor.
 

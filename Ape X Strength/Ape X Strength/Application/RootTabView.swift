@@ -40,6 +40,7 @@ struct RootTabView: View {
                 resetData: {
                     guard let authenticatedUser = dependencies.authentication.authenticatedUser else { return }
                     let user = try dependencies.persistence.initializeUser(authenticatedUser: authenticatedUser)
+                    try await dependencies.authentication.resetData()
                     try dependencies.persistence.resetUserData(for: user)
                 }
             )

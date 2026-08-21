@@ -9,11 +9,12 @@ struct SettingsView: View {
     private let workoutRepository: any WorkoutRepository
     private let hasPendingSyncChanges: () throws -> Bool
     private let syncData: () async throws -> Void
-    private let resetData: () throws -> Void
+    private let resetData: () async throws -> Void
     @State private var syncStatus: SyncStatus = .ready
     @State private var isShowingSyncConfirmation = false
     @State private var isShowingSyncError = false
     @State private var isShowingResetConfirmation = false
+    @State private var isShowingDeleteAccountConfirmation = false
     @State private var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
     @Environment(\.scenePhase) private var scenePhase
 
@@ -24,7 +25,7 @@ struct SettingsView: View {
         workoutRepository: any WorkoutRepository,
         hasPendingSyncChanges: @escaping () throws -> Bool,
         syncData: @escaping () async throws -> Void,
-        resetData: @escaping () throws -> Void
+        resetData: @escaping () async throws -> Void
     ) {
         _viewModel = StateObject(wrappedValue: viewModel())
         self.authenticationService = authenticationService
@@ -193,25 +194,18 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Button {
-                        isShowingResetConfirmation = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "trash.fill")
-                            Text("Reset Data")
+                    HStack(spacing: ApeSpacing.sm) {
+                        destructiveButton(title: "Reset Data", icon: "trash.fill") {
+                            isShowingResetConfirmation = true
                         }
-                        .font(.apeHeadline)
-                        .foregroundStyle(ApeColor.destructive)
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                        .background(ApeColor.destructive.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: ApeRadius.control)
-                                .stroke(ApeColor.destructive, lineWidth: 1)
+                        .accessibilityHint("Permanently deletes your training data")
+
+                        destructiveButton(title: "Delete Account", icon: "person.crop.circle.badge.minus") {
+                            isShowingDeleteAccountConfirmation = true
                         }
+                        .accessibilityIdentifier("deleteAccountButton")
+                        .accessibilityHint("Permanently deletes your account and training data")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Permanently deletes your training data")
 
                 }
                 .padding(ApeSpacing.md)
@@ -234,11 +228,15 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $isShowingResetConfirmation) {
                 ResetDataConfirmationView {
-                    try resetData()
-                    isShowingResetConfirmation = false
+                    try await resetData()
                 }
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $isShowingDeleteAccountConfirmation) {
+                DeleteAccountConfirmationView(authenticationService: authenticationService)
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
             }
             .task { await refreshNotificationAuthorization() }
             .onChange(of: scenePhase) { _, phase in
@@ -246,6 +244,31 @@ struct SettingsView: View {
                 Task { await refreshNotificationAuthorization() }
             }
         }
+    }
+
+    private func destructiveButton(
+        title: String,
+        icon: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: ApeSpacing.xs) {
+                Image(systemName: icon)
+                Text(title)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .font(.apeHeadline)
+            .foregroundStyle(ApeColor.destructive)
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .background(ApeColor.destructive.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
+            .overlay {
+                RoundedRectangle(cornerRadius: ApeRadius.control)
+                    .stroke(ApeColor.destructive, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func refreshNotificationAuthorization() async {
@@ -711,7 +734,8 @@ private struct ResetDataConfirmationView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmationText = ""
     @State private var errorMessage: String?
-    let resetData: () throws -> Void
+    @State private var isResetting = false
+    let resetData: () async throws -> Void
 
     private var isConfirmed: Bool {
         confirmationText == "RESET DATA"
@@ -743,19 +767,21 @@ private struct ResetDataConfirmationView: View {
 
                 Spacer()
 
-                Button("Permanently Reset Data") {
-                    do {
-                        try resetData()
-                    } catch {
-                        errorMessage = "The data could not be reset. Please try again."
+                Button {
+                    Task { await permanentlyResetData() }
+                } label: {
+                    if isResetting {
+                        ProgressView().tint(.white)
+                    } else {
+                        Text("Permanently Reset Data")
                     }
                 }
                 .font(.apeHeadline)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, minHeight: 52)
-                .background(isConfirmed ? ApeColor.destructive : ApeColor.control)
+                .background(isConfirmed && !isResetting ? ApeColor.destructive : ApeColor.control)
                 .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
-                .disabled(!isConfirmed)
+                .disabled(!isConfirmed || isResetting)
             }
             .padding(ApeSpacing.md)
             .background(ApeColor.background.ignoresSafeArea())
@@ -764,9 +790,107 @@ private struct ResetDataConfirmationView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .disabled(isResetting)
                 }
             }
             .toolbarColorScheme(.dark, for: .navigationBar)
+        }
+    }
+
+    @MainActor
+    private func permanentlyResetData() async {
+        guard !isResetting else { return }
+        isResetting = true
+        errorMessage = nil
+        do {
+            try await resetData()
+            dismiss()
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "The data could not be reset. Please try again."
+            isResetting = false
+        }
+    }
+}
+
+private struct DeleteAccountConfirmationView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmationText = ""
+    @State private var errorMessage: String?
+    @State private var isDeleting = false
+    let authenticationService: any EmailAuthenticationService
+
+    private var isConfirmed: Bool {
+        confirmationText == "DELETE ACCOUNT"
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: ApeSpacing.md) {
+                Label("This cannot be undone", systemImage: "exclamationmark.triangle.fill")
+                    .font(.apeHeadline)
+                    .foregroundStyle(ApeColor.destructive)
+
+                Text("Your account and all associated training data will be permanently deleted.")
+                    .font(.apeBody)
+                    .foregroundStyle(ApeColor.textSecondary)
+
+                ApeFormField("Type DELETE ACCOUNT to confirm") {
+                    TextField("DELETE ACCOUNT", text: $confirmationText)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(ApeTextFieldStyle())
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.apeCallout)
+                        .foregroundStyle(ApeColor.destructive)
+                }
+
+                Spacer()
+
+                Button {
+                    Task { await deleteAccount() }
+                } label: {
+                    if isDeleting {
+                        ProgressView().tint(.white)
+                    } else {
+                        Text("Permanently Delete Account")
+                    }
+                }
+                .font(.apeHeadline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .background(isConfirmed && !isDeleting ? ApeColor.destructive : ApeColor.control)
+                .clipShape(RoundedRectangle(cornerRadius: ApeRadius.control))
+                .disabled(!isConfirmed || isDeleting)
+                .accessibilityIdentifier("confirmDeleteAccountButton")
+            }
+            .padding(ApeSpacing.md)
+            .background(ApeColor.background.ignoresSafeArea())
+            .navigationTitle("Delete Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(isDeleting)
+                }
+            }
+            .toolbarColorScheme(.dark, for: .navigationBar)
+        }
+    }
+
+    @MainActor
+    private func deleteAccount() async {
+        guard !isDeleting else { return }
+        isDeleting = true
+        errorMessage = nil
+        do {
+            try await authenticationService.deleteAccount()
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            isDeleting = false
         }
     }
 }

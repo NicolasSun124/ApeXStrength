@@ -179,6 +179,33 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
             _ = try? await session.data(for: request)
         }
 
+        clearSession()
+    }
+
+    func deleteAccount() async throws {
+        guard let token = tokenStore.read() else {
+            throw EmailAuthenticationError.invalidResponse
+        }
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("account"))
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        _ = try await perform(request)
+        clearSession()
+    }
+
+    func resetData() async throws {
+        guard let token = tokenStore.read() else {
+            throw EmailAuthenticationError.invalidResponse
+        }
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("data"))
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        _ = try await perform(request)
+    }
+
+    private func clearSession() {
         tokenStore.delete()
         defaults.removeObject(forKey: emailKey)
         defaults.removeObject(forKey: nameKey)

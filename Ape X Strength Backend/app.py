@@ -662,6 +662,37 @@ def sign_out():
     return "", 204
 
 
+@app.delete("/v1/account")
+def delete_account():
+    user = authenticated_user()
+    if not user:
+        return jsonify(error="Unauthorized."), 401
+
+    db.session.delete(user)
+    db.session.commit()
+    return "", 204
+
+
+@app.delete("/v1/data")
+def reset_data():
+    user = authenticated_user()
+    if not user:
+        return jsonify(error="Unauthorized."), 401
+
+    # Every predicate is ownership-scoped. Deleting parent rows cascades to their
+    # child and join-table rows while leaving global muscles and other users alone.
+    db.session.execute(db.delete(WorkoutSession).where(WorkoutSession.user_id == user.id))
+    db.session.execute(db.delete(WorkoutTemplate).where(WorkoutTemplate.user_id == user.id))
+    db.session.execute(db.delete(Exercise).where(Exercise.user_id == user.id))
+    db.session.execute(db.delete(Tag).where(Tag.user_id == user.id))
+    db.session.execute(db.delete(SyncRecord).where(SyncRecord.user_id == user.id))
+    user.sync_data = None
+    user.synced_at = None
+    user.sync_revision = 0
+    db.session.commit()
+    return "", 204
+
+
 @app.put("/v1/sync")
 def sync_data():
     user = authenticated_user()

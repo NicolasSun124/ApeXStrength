@@ -125,7 +125,13 @@ struct PersistenceController {
         let tagRequest = Tag.fetchRequest()
         tagRequest.predicate = NSPredicate(format: "owner == %@", user)
         try context.fetch(tagRequest).forEach(context.delete)
+
+        let tombstoneRequest = SyncTombstone.fetchRequest()
+        tombstoneRequest.predicate = NSPredicate(format: "owner == %@", user)
+        try context.fetch(tombstoneRequest).forEach(context.delete)
+
         user.hiddenExercises = nil
+        user.syncCursor = 0
 
         if context.hasChanges {
             try context.save()
