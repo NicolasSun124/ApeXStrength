@@ -84,5 +84,6 @@ struct RootTabView_Previews: PreviewProvider {
         RootTabView()
             .environment(\.appDependencies, AppDependencies.preview)
             .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+            .environmentObject(SessionRecoveryCoordinator())
     }
 }

@@ -63,6 +63,7 @@ struct ApeTextFieldStyle: TextFieldStyle {
             .overlay {
                 RoundedRectangle(cornerRadius: ApeRadius.control, style: .continuous)
                     .stroke(ApeColor.divider, lineWidth: 1)
+                    .allowsHitTesting(false)
             }
     }
 }

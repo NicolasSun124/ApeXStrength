@@ -80,7 +80,8 @@ final class RestTimerCoordinator: ObservableObject {
         guard authorizationStatus == .authorized || authorizationStatus == .provisional else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "Rest complete"
+        content.title = "⏱ Rest complete"
+        content.subtitle = workoutName
         content.body = "Time for your next set."
         content.sound = .default
         let trigger = UNTimeIntervalNotificationTrigger(

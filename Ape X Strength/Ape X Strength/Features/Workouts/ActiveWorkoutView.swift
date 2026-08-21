@@ -24,7 +24,7 @@ struct ActiveWorkoutView: View {
     @State private var timePickerMinutes = 0
     @State private var timePickerSeconds = 0
     @StateObject private var restTimerCoordinator = RestTimerCoordinator()
-    @FocusState private var isNumericFieldFocused: Bool
+    @FocusState private var focusedNumericField: NumericFieldFocus?
 
     init(
         workout: WorkoutPreview,
@@ -108,7 +108,7 @@ struct ActiveWorkoutView: View {
             }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                Button("Done") { isNumericFieldFocused = false }
+                Button("Done") { focusedNumericField = nil }
             }
         }
         .sheet(isPresented: $isSelectingExercise) {
@@ -307,7 +307,11 @@ struct ActiveWorkoutView: View {
                 } content: { HStack(spacing: ApeSpacing.xs) {
                     value("\(set.number)", width: 42)
                     if exercise.wrappedValue.repType == .reps {
-                        editableInteger($set.reps, accessibilityLabel: "Reps for set \(set.number)")
+                        editableInteger(
+                            $set.reps,
+                            focus: .reps(exercise.wrappedValue.id, set.id),
+                            accessibilityLabel: "Reps for set \(set.number)"
+                        )
                     } else if exercise.wrappedValue.repType == .time {
                         timeButton(
                             set.timeText,
@@ -316,12 +320,20 @@ struct ActiveWorkoutView: View {
                             accessibilityLabel: "Time for set \(set.number)"
                         )
                     } else {
-                        editableDecimal($set.distance, accessibilityLabel: "Distance for set \(set.number)")
+                        editableDecimal(
+                            $set.distance,
+                            focus: .distance(exercise.wrappedValue.id, set.id),
+                            accessibilityLabel: "Distance for set \(set.number)"
+                        )
                     }
                     if exercise.wrappedValue.difficultyType == .bodyweight {
                         value("–")
                     } else {
-                        editableDecimal($set.weight, accessibilityLabel: "Weight for set \(set.number)")
+                        editableDecimal(
+                            $set.weight,
+                            focus: .weight(exercise.wrappedValue.id, set.id),
+                            accessibilityLabel: "Weight for set \(set.number)"
+                        )
                     }
                     Button {
                         let isFinishing = !set.isCompleted
@@ -547,10 +559,14 @@ struct ActiveWorkoutView: View {
             .background(ApeColor.control).clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private func editableInteger(_ value: Binding<Int>, accessibilityLabel: String) -> some View {
+    private func editableInteger(
+        _ value: Binding<Int>,
+        focus: NumericFieldFocus,
+        accessibilityLabel: String
+    ) -> some View {
         TextField("0", value: value, format: .number)
             .keyboardType(.numberPad)
-            .focused($isNumericFieldFocused)
+            .focused($focusedNumericField, equals: focus)
             .multilineTextAlignment(.center)
             .font(.apeBody)
             .foregroundStyle(ApeColor.textPrimary)
@@ -560,10 +576,14 @@ struct ActiveWorkoutView: View {
             .accessibilityLabel(accessibilityLabel)
     }
 
-    private func editableDecimal(_ value: Binding<Decimal>, accessibilityLabel: String) -> some View {
+    private func editableDecimal(
+        _ value: Binding<Decimal>,
+        focus: NumericFieldFocus,
+        accessibilityLabel: String
+    ) -> some View {
         TextField("0", value: value, format: .number.precision(.fractionLength(0...2)))
             .keyboardType(.decimalPad)
-            .focused($isNumericFieldFocused)
+            .focused($focusedNumericField, equals: focus)
             .multilineTextAlignment(.center)
             .font(.apeBody)
             .foregroundStyle(ApeColor.textPrimary)
@@ -654,7 +674,7 @@ private struct ActiveSetSwipeToRemove<Content: View>: View {
             content
                 .offset(x: offset)
                 .contentShape(Rectangle())
-                .gesture(
+                .simultaneousGesture(
                     DragGesture(minimumDistance: 12)
                         .onChanged { value in
                             guard abs(value.translation.width) > abs(value.translation.height) else { return }
@@ -675,6 +695,12 @@ private struct ActiveSetSwipeToRemove<Content: View>: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
+}
+
+private enum NumericFieldFocus: Hashable {
+    case reps(UUID, UUID)
+    case distance(UUID, UUID)
+    case weight(UUID, UUID)
 }
 
 private struct ActiveWorkoutExercise: Identifiable {

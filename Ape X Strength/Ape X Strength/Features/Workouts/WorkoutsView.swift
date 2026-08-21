@@ -1,6 +1,18 @@
 import SwiftUI
 
+@MainActor
+final class SessionRecoveryCoordinator: ObservableObject {
+    private var hasCheckedForActiveSession = false
+
+    func claimRecoveryCheck() -> Bool {
+        guard !hasCheckedForActiveSession else { return false }
+        hasCheckedForActiveSession = true
+        return true
+    }
+}
+
 struct WorkoutsView: View {
+    @EnvironmentObject private var sessionRecoveryCoordinator: SessionRecoveryCoordinator
     @StateObject private var viewModel: WorkoutsViewModel
     @State private var isCreatingWorkout = false
     @State private var isShowingSessionHistory = false
@@ -93,6 +105,7 @@ struct WorkoutsView: View {
         }
         .task {
             if viewModel.state == .idle { viewModel.load() }
+            guard sessionRecoveryCoordinator.claimRecoveryCheck() else { return }
             viewModel.detectActiveSessionDraft()
             isShowingDraftPrompt = viewModel.activeSessionDraft != nil
         }

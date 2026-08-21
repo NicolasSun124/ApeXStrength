@@ -469,7 +469,7 @@ private struct SetSwipeToRemove<Content: View>: View {
             content
                 .offset(x: offset)
                 .contentShape(Rectangle())
-                .gesture(
+                .simultaneousGesture(
                     DragGesture(minimumDistance: 12)
                         .onChanged { value in
                             guard abs(value.translation.width) > abs(value.translation.height) else { return }

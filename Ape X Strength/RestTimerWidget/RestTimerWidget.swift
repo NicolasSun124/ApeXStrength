@@ -18,52 +18,87 @@ struct RestTimerWidgetBundle: WidgetBundle {
 }
 
 struct RestTimerLiveActivity: Widget {
+    private let backgroundColor = Color(red: 0.03, green: 0.04, blue: 0.15)
+    private let accentColor = Color(red: 0.43, green: 0.92, blue: 0.94)
+
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: RestTimerAttributes.self) { context in
-            HStack(spacing: 14) {
-                Image(systemName: "hourglass")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Rest Timer")
-                        .font(.headline)
-                    Text(context.attributes.workoutName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
+                    Image(systemName: "figure.strengthtraining.traditional")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(backgroundColor)
+                        .frame(width: 40, height: 40)
+                        .background(accentColor, in: Circle())
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("REST TIMER")
+                            .font(.caption.weight(.bold))
+                            .tracking(1.1)
+                            .foregroundStyle(accentColor)
+                        Text(context.attributes.workoutName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("REMAINING")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white.opacity(0.7))
+                        countdown(until: context.state.endDate)
+                            .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .minimumScaleFactor(0.75)
+                    }
                 }
-                Spacer()
-                countdown(until: context.state.endDate)
-                    .font(.title2.bold().monospacedDigit())
+
+                ProgressView(timerInterval: Date()...max(context.state.endDate, Date()), countsDown: true)
+                    .tint(accentColor)
             }
-            .padding()
-            .activityBackgroundTint(Color.black.opacity(0.9))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .activityBackgroundTint(backgroundColor)
             .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     Label("Rest", systemImage: "hourglass")
-                        .foregroundStyle(.orange)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(accentColor)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     countdown(until: context.state.endDate)
-                        .font(.headline.monospacedDigit())
+                        .font(.title3.bold().monospacedDigit())
+                        .foregroundStyle(.white)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(context.attributes.workoutName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text(context.attributes.workoutName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Spacer()
+                        Text("Next set")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
                 }
             } compactLeading: {
                 Image(systemName: "hourglass")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(accentColor)
             } compactTrailing: {
                 countdown(until: context.state.endDate)
-                    .font(.caption2.monospacedDigit())
-                    .frame(width: 42)
+                    .font(.caption.bold().monospacedDigit())
+                    .foregroundStyle(.white)
+                    .frame(width: 46)
             } minimal: {
                 Image(systemName: "hourglass")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(accentColor)
             }
+            .keylineTint(accentColor)
         }
     }
 
