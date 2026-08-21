@@ -6,11 +6,14 @@ import uuid
 import json
 import urllib.error
 import urllib.request
+import math
+import re
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -262,6 +265,161 @@ PREMADE_TAGS = (
 
 class DomainProjectionError(ValueError):
     pass
+
+
+MAX_SYNC_CHANGES = 500
+MAX_SYNC_REQUEST_BYTES = 1_000_000
+MAX_REST_SECONDS = 86_400
+SYNC_ENTITIES = frozenset({
+    "settings", "hidden_global_exercises", "exercise", "tag", "workout",
+    "template_exercise", "template_set", "workout_session", "session_exercise",
+    "session_set",
+})
+TRACKING_TYPES = frozenset(
+    f"{rep}_{difficulty}"
+    for rep in ("reps", "time", "distance")
+    for difficulty in ("weighted", "bodyweight", "assisted_weight")
+) | frozenset(
+    f"{rep}|{difficulty}"
+    for rep in ("reps", "time", "distance")
+    for difficulty in ("weighted", "bodyweight", "assisted_weight")
+) | {"reps", "time", "distance", "reps_weight"}  # Supported by older app versions.
+DIFFICULTY_TYPES = frozenset({"weighted", "bodyweight", "assisted_weight"})
+HEX_COLOR = re.compile(r"^[0-9A-Fa-f]{6}$")
+
+
+def invalid(field, message):
+    raise DomainProjectionError(f"{field} {message}")
+
+
+def validate_uuid(value, field, optional=False):
+    if optional and (value is None or value == ""):
+        return
+    if not isinstance(value, str):
+        invalid(field, "must be a UUID string.")
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError) as error:
+        raise DomainProjectionError(f"{field} must be a valid UUID.") from error
+
+
+def validate_string(value, field, maximum, optional=False):
+    if optional and value is None:
+        return
+    if not isinstance(value, str) or not value.strip():
+        invalid(field, "must be a non-empty string.")
+    if len(value) > maximum:
+        invalid(field, f"must be at most {maximum} characters.")
+
+
+def validate_number(value, field, *, integer=False, minimum=None, maximum=None, optional=True):
+    if value is None and optional:
+        return
+    valid_type = isinstance(value, int) if integer else isinstance(value, (int, float))
+    if isinstance(value, bool) or not valid_type or not math.isfinite(float(value)):
+        invalid(field, f"must be a{'n integer' if integer else ' finite number'}.")
+    if minimum is not None and value < minimum:
+        invalid(field, f"must be at least {minimum}.")
+    if maximum is not None and value > maximum:
+        invalid(field, f"must be at most {maximum}.")
+
+
+def validate_uuid_list(value, field):
+    if value is None:
+        return
+    if not isinstance(value, list) or len(value) > MAX_SYNC_CHANGES:
+        invalid(field, f"must be a list of at most {MAX_SYNC_CHANGES} UUIDs.")
+    for item in value:
+        validate_uuid(item, field)
+
+
+def validate_sync_change(change):
+    if not isinstance(change, dict):
+        invalid("Sync change", "must be an object.")
+    entity = change.get("entity")
+    operation = change.get("operation")
+    client_uuid = change.get("client_uuid")
+    if entity not in SYNC_ENTITIES:
+        invalid("entity", "is not supported.")
+    if operation not in {"upsert", "delete"}:
+        invalid("operation", "must be 'upsert' or 'delete'.")
+    singleton_ids = {"settings": "settings", "hidden_global_exercises": "hidden-global-exercises"}
+    if entity in singleton_ids:
+        if client_uuid != singleton_ids[entity]:
+            invalid("client_uuid", f"must be '{singleton_ids[entity]}' for {entity}.")
+    else:
+        validate_uuid(client_uuid, "client_uuid")
+    if operation == "delete":
+        return
+    data = change.get("data")
+    if not isinstance(data, dict):
+        invalid("data", "must be an object.")
+
+    if entity == "settings":
+        if data.get("weight_unit", "lbs") not in {"lbs", "kg"}:
+            invalid("weight_unit", "must be 'lbs' or 'kg'.")
+        if data.get("distance_unit", "mi") not in {"mi", "km"}:
+            invalid("distance_unit", "must be 'mi' or 'km'.")
+    elif entity == "hidden_global_exercises":
+        validate_uuid_list(data.get("exercise_ids"), "exercise_ids")
+    elif entity == "exercise":
+        if "name" in data:
+            validate_string(data["name"], "name", 160)
+        if "tracking_type" in data and data["tracking_type"] not in TRACKING_TYPES:
+            invalid("tracking_type", "is not supported.")
+        validate_number(data.get("target_rest_seconds", 120), "target_rest_seconds", integer=True,
+                        minimum=0, maximum=MAX_REST_SECONDS, optional=False)
+        validate_uuid(data.get("primary_muscle_id"), "primary_muscle_id", optional=True)
+        validate_uuid_list(data.get("secondary_muscle_ids"), "secondary_muscle_ids")
+        color = data.get("primary_muscle_color")
+        if color is not None and (not isinstance(color, str) or not HEX_COLOR.fullmatch(color)):
+            invalid("primary_muscle_color", "must be a six-digit hexadecimal color.")
+    elif entity == "tag":
+        validate_string(data.get("name"), "name", 120)
+    elif entity == "workout":
+        validate_string(data.get("name"), "name", 160)
+        validate_uuid_list(data.get("tag_ids"), "tag_ids")
+    elif entity == "template_exercise":
+        validate_uuid(data.get("workout_id"), "workout_id")
+        validate_uuid(data.get("exercise_id"), "exercise_id")
+        validate_uuid_list(data.get("alternate_exercise_ids"), "alternate_exercise_ids")
+        validate_number(data.get("position", 0), "position", integer=True, minimum=0, optional=False)
+    elif entity == "template_set":
+        validate_uuid(data.get("template_exercise_id"), "template_exercise_id")
+        validate_number(data.get("number", 1), "number", integer=True, minimum=1, optional=False)
+        for field in ("reps",):
+            validate_number(data.get(field), field, integer=True, minimum=0)
+        for field in ("time_seconds", "distance", "weight"):
+            validate_number(data.get(field), field, minimum=0)
+    elif entity == "workout_session":
+        validate_uuid(data.get("workout_id"), "workout_id", optional=True)
+        validate_number(data.get("duration_seconds"), "duration_seconds", integer=True, minimum=0)
+        validate_number(data.get("rating"), "rating", integer=True, minimum=1, maximum=5)
+        validate_number(data.get("percent_completed"), "percent_completed", minimum=0, maximum=100)
+        for field in ("volume_weight", "estimated_intensity"):
+            validate_number(data.get(field), field, minimum=0)
+        validate_number(data.get("average_rest_seconds"), "average_rest_seconds",
+                        minimum=0, maximum=MAX_REST_SECONDS)
+    elif entity == "session_exercise":
+        validate_uuid(data.get("session_id"), "session_id")
+        validate_uuid(data.get("exercise_id"), "exercise_id", optional=True)
+        validate_string(data.get("name"), "name", 160)
+        if data.get("tracking_type") not in TRACKING_TYPES:
+            invalid("tracking_type", "is not supported.")
+        if data.get("difficulty_type") not in DIFFICULTY_TYPES:
+            invalid("difficulty_type", "is not supported.")
+        color = data.get("primary_muscle_color")
+        if not isinstance(color, str) or not HEX_COLOR.fullmatch(color):
+            invalid("primary_muscle_color", "must be a six-digit hexadecimal color.")
+        validate_number(data.get("target_rest_seconds"), "target_rest_seconds", integer=True,
+                        minimum=0, maximum=MAX_REST_SECONDS)
+        validate_number(data.get("position", 0), "position", integer=True, minimum=0, optional=False)
+    elif entity == "session_set":
+        validate_uuid(data.get("session_exercise_id"), "session_exercise_id")
+        validate_number(data.get("number", 1), "number", integer=True, minimum=1, optional=False)
+        validate_number(data.get("reps"), "reps", integer=True, minimum=0)
+        for field in ("time_seconds", "distance", "weight", "pace"):
+            validate_number(data.get(field), field, minimum=0)
 
 
 def deterministic_seed_uuid(value):
@@ -734,11 +892,19 @@ def sync_data():
     if not user:
         return jsonify(error="Unauthorized."), 401
 
+    if request.content_length is not None and request.content_length > MAX_SYNC_REQUEST_BYTES:
+        return jsonify(error="Sync request is too large."), 400
     payload = request.get_json(silent=True) or {}
     changes = payload.get("changes")
     cursor = payload.get("cursor", 0)
-    if not isinstance(changes, list) or not isinstance(cursor, int) or cursor < 0:
+    if (not isinstance(changes, list) or len(changes) > MAX_SYNC_CHANGES
+            or not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0):
         return jsonify(error="Invalid incremental sync request."), 400
+    try:
+        for change in changes:
+            validate_sync_change(change)
+    except DomainProjectionError as error:
+        return jsonify(error=str(error)), 400
 
     accepted = []
     conflicts = []
@@ -820,6 +986,12 @@ def sync_data():
                 record.deleted_at = None
                 record.data = data
                 project_domain_upsert(user.id, entity, client_uuid, data, now)
+            # Surface remaining relational/check constraint failures here, where
+            # they can be rolled back and translated into a client response.
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify(error="Sync data violates a database constraint."), 400
         except (DomainProjectionError, TypeError, ValueError) as error:
             db.session.rollback()
             return jsonify(error=str(error)), 400
