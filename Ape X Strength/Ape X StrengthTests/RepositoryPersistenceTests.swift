@@ -131,6 +131,7 @@ final class RepositoryPersistenceTests: XCTestCase {
         otherUser.email = "other@example.com"
         let global = Exercise(context: fixture.context)
         global.name = "Global Squat"
+        global.serverID = UUID()
         global.createdAt = Date()
         global.trackingType = "reps|weighted"
         global.primaryMuscle = fixture.muscle
@@ -139,9 +140,14 @@ final class RepositoryPersistenceTests: XCTestCase {
 
         try fixture.exercises.archiveExercise(id: global.objectID)
 
+        XCTAssertEqual(fixture.user.hiddenExercisesSyncState, "pendingUpdate")
         XCTAssertFalse(try fixture.exercises.fetchExercises().contains { $0.id == global.objectID })
         XCTAssertTrue(try fixture.exercises.fetchArchivedExercises().contains { $0.id == global.objectID })
         XCTAssertTrue(try otherRepository.fetchExercises().contains { $0.id == global.objectID })
+
+        fixture.user.hiddenExercisesSyncState = "synced"
+        try fixture.exercises.restoreExercise(id: global.objectID)
+        XCTAssertEqual(fixture.user.hiddenExercisesSyncState, "pendingUpdate")
     }
 
     @MainActor

@@ -1333,6 +1333,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
         let exercise = try editableExercise(id: id)
         if isGlobalExercise(exercise) {
             exercise.mutableSetValue(forKey: "hiddenByUsers").add(user)
+            user.hiddenExercisesSyncState = "pendingUpdate"
         } else {
             exercise.isArchived = true
             exercise.syncState = "pendingUpdate"
@@ -1351,6 +1352,7 @@ final class CoreDataExerciseRepository: ExerciseRepository {
                 throw ExerciseRepositoryError.exerciseNotFound
             }
             exercise.mutableSetValue(forKey: "hiddenByUsers").remove(user)
+            user.hiddenExercisesSyncState = "pendingUpdate"
         } else {
             guard exercise.isArchived else { throw ExerciseRepositoryError.exerciseNotFound }
             exercise.isArchived = false

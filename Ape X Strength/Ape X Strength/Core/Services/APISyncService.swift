@@ -103,6 +103,14 @@ final class APISyncService: SyncService {
             add("settings", "settings", "pendingUpdate", ["weight_unit": value.weightUnit, "distance_unit": value.distanceUnit,
                 "rest_timer_notifications_enabled": value.restTimerNotificationsEnabled])
         }
+        if forceAll || user.hiddenExercisesSyncState != "synced" {
+            let hiddenIDs = (user.hiddenExercises as? Set<Exercise> ?? [])
+                .filter { $0.owner == nil && $0.clientUUID == nil }
+                .compactMap { $0.serverID?.uuidString }
+                .sorted()
+            add("hidden_global_exercises", "hidden-global-exercises", user.hiddenExercisesSyncState,
+                ["exercise_ids": hiddenIDs])
+        }
         for item in try fetch(Exercise.self, predicate: pending) {
             let secondaryMuscles = item.secondaryMuscles as? Set<Muscle> ?? []
             let data: [String: Any] = [
@@ -215,6 +223,19 @@ final class APISyncService: SyncService {
                 }
                 continue
             }
+            if entity == "hidden_global_exercises" {
+                if let sentIDs = sentChanges.first(where: {
+                    $0["entity"] as? String == "hidden_global_exercises"
+                })?["data"] as? [String: Any],
+                   let sent = sentIDs["exercise_ids"] as? [String] {
+                    let current = (user.hiddenExercises as? Set<Exercise> ?? [])
+                        .filter { $0.owner == nil && $0.clientUUID == nil }
+                        .compactMap { $0.serverID?.uuidString }
+                        .sorted()
+                    if sent == current { user.hiddenExercisesSyncState = "synced" }
+                }
+                continue
+            }
             if let uuidString = acknowledgement["client_uuid"] as? String, let uuid = UUID(uuidString: uuidString) {
                 let tombstones = NSFetchRequest<SyncTombstone>(entityName: "SyncTombstone")
                 tombstones.predicate = NSPredicate(format: "clientUUID == %@ AND entityType == %@", uuid as CVarArg, entity)
@@ -233,6 +254,10 @@ final class APISyncService: SyncService {
     private func markInFlight(_ changes: [[String: Any]]) {
         let names = ["exercise": "Exercise", "tag": "Tag", "workout": "WorkoutTemplate", "template_exercise": "TemplateExercise", "template_set": "TemplatePlannedSet", "workout_session": "WorkoutSession", "session_exercise": "SessionExercise", "session_set": "SessionSet"]
         for change in changes {
+            if change["entity"] as? String == "hidden_global_exercises" {
+                user.hiddenExercisesSyncState = "syncing"
+                continue
+            }
             guard let entity = change["entity"] as? String, let name = names[entity], let raw = change["client_uuid"] as? String, let uuid = UUID(uuidString: raw) else { continue }
             let request = NSFetchRequest<NSManagedObject>(entityName: name); request.predicate = NSPredicate(format: "clientUUID == %@", uuid as CVarArg)
             (try? context.fetch(request))?.forEach { $0.setValue("syncing", forKey: "syncState") }
@@ -240,6 +265,9 @@ final class APISyncService: SyncService {
         try? context.save()
     }
     private func restoreInFlight() {
+        if user.hiddenExercisesSyncState == "syncing" {
+            user.hiddenExercisesSyncState = "pendingUpdate"
+        }
         for name in ["Exercise", "Tag", "WorkoutTemplate", "TemplateExercise", "TemplatePlannedSet", "WorkoutSession", "SessionExercise", "SessionSet"] {
             let request = NSFetchRequest<NSManagedObject>(entityName: name); request.predicate = NSPredicate(format: "syncState == %@", "syncing")
             (try? context.fetch(request))?.forEach { $0.setValue("pendingUpdate", forKey: "syncState") }
@@ -258,6 +286,11 @@ final class APISyncService: SyncService {
                     distanceUnit: data["distance_unit"] as? String ?? "km",
                     restTimerNotificationsEnabled: data["rest_timer_notifications_enabled"] as? Bool ?? true
                 ))
+                continue
+            }
+            if entity == "hidden_global_exercises", operation == "upsert",
+               let data = change["data"] as? [String: Any] {
+                try applyHiddenGlobalExercises(data)
                 continue
             }
             guard let uuid = UUID(uuidString: uuidString) else { continue }
@@ -294,6 +327,17 @@ final class APISyncService: SyncService {
             default: break
             }
         }
+    }
+
+    private func applyHiddenGlobalExercises(_ data: [String: Any]) throws {
+        let ids = Set((data["exercise_ids"] as? [String] ?? []).compactMap(UUID.init(uuidString:)))
+        let request = Exercise.fetchRequest()
+        request.predicate = NSPredicate(format: "owner == nil AND clientUUID == nil")
+        let globals = try context.fetch(request)
+        user.hiddenExercises = Set(globals.filter { exercise in
+            exercise.serverID.map(ids.contains) ?? false
+        }) as NSSet
+        user.hiddenExercisesSyncState = "synced"
     }
 
     private func applySession(_ uuid: UUID, _ data: [String: Any]) throws {

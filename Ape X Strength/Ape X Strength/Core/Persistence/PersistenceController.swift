@@ -131,6 +131,7 @@ struct PersistenceController {
         try context.fetch(tombstoneRequest).forEach(context.delete)
 
         user.hiddenExercises = nil
+        user.hiddenExercisesSyncState = "pendingUpdate"
         user.syncCursor = 0
 
         if context.hasChanges {

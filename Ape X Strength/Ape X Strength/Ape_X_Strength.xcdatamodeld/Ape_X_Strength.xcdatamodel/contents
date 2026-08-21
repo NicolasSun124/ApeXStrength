@@ -8,6 +8,7 @@
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="preferredWeightUnit" attributeType="String" defaultValueString="lbs"/>
         <attribute name="serverID" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="hiddenExercisesSyncState" attributeType="String" defaultValueString="pendingUpdate"/>
         <attribute name="syncCursor" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="syncProtocolVersion" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="customExercises" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Exercise" inverseName="owner" inverseEntity="Exercise"/>
