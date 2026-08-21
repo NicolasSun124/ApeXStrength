@@ -64,3 +64,23 @@ Endpoints:
 - `PUT /v1/sync` with a bearer token, cursor, and incremental record changes. The response includes acknowledgements, conflicts, and server changes after the cursor.
 
 Copy the settings in `.env.example` into your environment for local or production deployment. Do not commit a Brevo API key.
+
+## Tests
+
+Install the development requirements, then run the fast unit and SQLite-backed
+integration suites:
+
+```bash
+pytest -m "not e2e"
+```
+
+The end-to-end suite runs the API over real HTTP, applies the production SQL
+migrations to PostgreSQL, verifies the normalized projection and journal, and
+checks PostgreSQL constraints. Its safety guard only accepts a database whose
+name ends in `_test`.
+
+```bash
+docker compose up -d test-db
+TEST_DATABASE_URL=postgresql+psycopg://apexstrength:test-password@127.0.0.1:5433/apexstrength_test pytest -m e2e
+docker compose stop test-db
+```

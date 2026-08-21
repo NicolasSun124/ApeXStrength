@@ -121,6 +121,7 @@ class Exercise(db.Model):
     tracking_type = db.Column(db.String(80), nullable=False)
     target_rest_seconds = db.Column(db.Integer, nullable=False, default=120)
     primary_muscle_id = db.Column(db.Uuid, db.ForeignKey("muscles.id", ondelete="RESTRICT"))
+    primary_muscle = db.relationship(Muscle, foreign_keys=[primary_muscle_id])
     secondary_muscles = db.relationship(Muscle, secondary=exercise_secondary_muscles)
 
 
@@ -368,7 +369,9 @@ def project_domain_upsert(user_id, entity, client_uuid, data, now):
         row.tracking_type = str(data.get("tracking_type") or "reps|weighted")[:80]
         row.target_rest_seconds = int(data.get("target_rest_seconds", 120))
         primary = upsert_muscle(data.get("primary_muscle_id"), data.get("primary_muscle_name"), data.get("primary_muscle_color"))
-        row.primary_muscle_id = primary.id if primary else None
+        # Assign the relationship, not only its foreign-key value, so SQLAlchemy
+        # orders a newly created muscle before the exercise that references it.
+        row.primary_muscle = primary
         secondary_ids = data.get("secondary_muscle_ids") or []
         row.secondary_muscles = [
             upsert_muscle(raw_id, "Unknown", "8AC5FF") for raw_id in secondary_ids
