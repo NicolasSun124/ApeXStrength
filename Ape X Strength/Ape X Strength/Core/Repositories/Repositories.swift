@@ -521,7 +521,9 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         do {
             try replaceContents(of: session, with: exercises, completedAt: Date())
             session.durationSeconds = Int64(max(0, Date().timeIntervalSince(session.startedAt ?? Date())))
+            session.syncState = session.syncState == "pendingCreate" ? "pendingCreate" : "pendingUpdate"
             try context.save()
+            onSyncRequested()
         } catch {
             context.rollback()
             throw error
@@ -568,8 +570,6 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
         completedAt: Date
     ) throws {
         let existingExercises = session.sessionExercises?.array as? [SessionExercise] ?? []
-        session.sessionExercises = NSOrderedSet()
-        existingExercises.forEach(context.delete)
 
         var completedSetCount = 0
         var totalSetCount = 0
@@ -578,17 +578,18 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
             guard let exercise = try context.existingObject(with: inputExercise.exerciseID) as? Exercise else {
                 throw WorkoutRepositoryError.exerciseNotFound
             }
-            let sessionExercise = SessionExercise(context: context)
-            sessionExercise.clientUUID = UUID()
-            sessionExercise.position = Int32(position)
-            sessionExercise.syncState = "pendingCreate"
-            sessionExercise.exercise = exercise
-            sessionExercise.session = session
-
-            let previousOccurrence = existingExercises.indices.contains(position)
+            let reusableExercise = existingExercises.indices.contains(position)
                 && existingExercises[position].exercise == exercise
                 ? existingExercises[position]
                 : nil
+            let sessionExercise = reusableExercise ?? SessionExercise(context: context)
+            if sessionExercise.clientUUID == nil { sessionExercise.clientUUID = UUID() }
+            sessionExercise.position = Int32(position)
+            sessionExercise.syncState = sessionExercise.syncState == "synced" ? "pendingUpdate" : sessionExercise.syncState
+            sessionExercise.exercise = exercise
+            sessionExercise.session = session
+
+            let previousOccurrence = reusableExercise
             let previousSetsByNumber = Dictionary(uniqueKeysWithValues:
                 (previousOccurrence?.sets?.array as? [SessionSet] ?? []).map { (Int($0.setNumber), $0) }
             )
@@ -610,8 +611,8 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 ?? NSNumber(value: exercise.targetRestSeconds)
 
             let sets = inputExercise.sets.map { inputSet in
-                let set = SessionSet(context: context)
-                set.clientUUID = UUID()
+                let set = previousSetsByNumber[inputSet.number] ?? SessionSet(context: context)
+                if set.clientUUID == nil { set.clientUUID = UUID() }
                 set.setNumber = Int32(inputSet.number)
                 set.reps = Int32(inputSet.reps)
                 set.timeSeconds = inputSet.timeSeconds
@@ -623,7 +624,7 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                     ? inputSet.completedAt ?? previousSetsByNumber[inputSet.number]?.completedAt ?? completedAt
                     : nil
                 set.isWarmup = false
-                set.syncState = "pendingCreate"
+                set.syncState = set.syncState == "synced" ? "pendingUpdate" : set.syncState
                 set.sessionExercise = sessionExercise
                 totalSetCount += 1
                 if inputSet.completed {
@@ -633,9 +634,15 @@ final class CoreDataWorkoutRepository: WorkoutRepository {
                 return set
             }
             sessionExercise.sets = NSOrderedSet(array: sets)
+            let retainedSetIDs = Set(sets.map(\.objectID))
+            (previousOccurrence?.sets?.array as? [SessionSet] ?? [])
+                .filter { !retainedSetIDs.contains($0.objectID) }
+                .forEach(context.delete)
             return sessionExercise
         }
         session.sessionExercises = NSOrderedSet(array: sessionExercises)
+        let retainedExerciseIDs = Set(sessionExercises.map(\.objectID))
+        existingExercises.filter { !retainedExerciseIDs.contains($0.objectID) }.forEach(context.delete)
         session.volumeWeight = NSDecimalNumber(decimal: totalVolume)
         session.percentCompleted = totalSetCount == 0
             ? 0

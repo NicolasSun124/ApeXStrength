@@ -712,6 +712,34 @@ def sync_data():
     conflicts = []
     now = datetime.now(timezone.utc)
     append_only = {"workout_session", "session_exercise", "session_set"}
+    # Capture active state before applying the batch. This also lets children
+    # update in the same request that finishes their session.
+    mutable_session_ids = {
+        row.client_uuid for row in db.session.execute(
+            db.select(SyncRecord).filter_by(user_id=user.id, entity_type="workout_session")
+        ).scalars()
+        if row.deleted_at is None and isinstance(row.data, dict) and row.data.get("ended_at") is None
+    }
+    mutable_session_ids.update(
+        str(change.get("client_uuid")) for change in changes
+        if isinstance(change, dict)
+        and change.get("entity") == "workout_session"
+        and change.get("operation") == "upsert"
+        and isinstance(change.get("data"), dict)
+        and change["data"].get("ended_at") is None
+    )
+
+    def belongs_to_mutable_session(entity, data):
+        if entity == "session_exercise":
+            return isinstance(data, dict) and str(data.get("session_id")) in mutable_session_ids
+        if entity == "session_set" and isinstance(data, dict):
+            exercise = db.session.execute(db.select(SyncRecord).filter_by(
+                user_id=user.id, entity_type="session_exercise",
+                client_uuid=str(data.get("session_exercise_id"))
+            )).scalar_one_or_none()
+            return bool(exercise and isinstance(exercise.data, dict)
+                        and str(exercise.data.get("session_id")) in mutable_session_ids)
+        return False
     for change in changes:
         if not isinstance(change, dict):
             db.session.rollback()
@@ -726,8 +754,13 @@ def sync_data():
             user_id=user.id, entity_type=entity, client_uuid=client_uuid
         )).scalar_one_or_none()
 
-        # Historical sessions are idempotent create-only records.
-        if entity in append_only and record:
+        # Historical sessions stay create-only; active sessions and their
+        # children can accept progress updates.
+        incoming_data = change.get("data") or {}
+        mutable_active_record = (
+            entity == "workout_session" and client_uuid in mutable_session_ids
+        ) or belongs_to_mutable_session(entity, incoming_data)
+        if entity in append_only and record and not mutable_active_record:
             accepted.append({"entity": entity, "client_uuid": client_uuid, "revision": record.revision})
             continue
         # A tombstone cannot be overwritten by an old device.

@@ -70,13 +70,13 @@ def test_authentication_flow():
         user = backend.db.session.execute(backend.db.select(backend.User).filter_by(email="athlete@example.com")).scalar_one()
         assert backend.domain_row(backend.Exercise, user.id, "exercise-1").name == "Bench"
 
-        # Sessions are append-only and a retry cannot overwrite history.
+        # Active sessions remain mutable so progress can be synced repeatedly.
         retry = client.put("/v1/sync", headers={"Authorization": f"Bearer {token}"}, json={"cursor": 2, "changes": [
-            {"entity": "workout_session", "operation": "upsert", "client_uuid": "session-1", "data": {"rating": 1}}
+            {"entity": "workout_session", "operation": "upsert", "client_uuid": "session-1", "data": {"rating": 1, "ended_at": None}}
         ]})
         assert retry.status_code == 200
         session = backend.db.session.execute(backend.db.select(backend.SyncRecord).filter_by(client_uuid="session-1")).scalar_one()
-        assert session.data["rating"] == 5
+        assert session.data["rating"] == 1
 
         # Tombstones prevent an older device from resurrecting deleted data.
         deleted = client.put("/v1/sync", headers={"Authorization": f"Bearer {token}"}, json={"cursor": 2, "changes": [
