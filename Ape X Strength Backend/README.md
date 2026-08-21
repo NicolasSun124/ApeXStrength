@@ -32,8 +32,9 @@ Open `http://localhost:8025` to read verification and password-reset emails. The
 
 For an existing database, apply the scripts in `migration/` that have not yet
 been run. `normalized_domain_migration.sql` introduces the relational domain
-schema. `sync_records` remains the incremental synchronization journal; the new
-tables provide the normalized relational persistence layer for application data.
+schema, and `multi_device_sessions_migration.sql` enables concurrent device
+sessions. `sync_records` remains the incremental synchronization journal; the
+new tables provide the normalized relational persistence layer for application data.
 
 The normalized schema includes user settings, muscles, exercises, tags, workout
 templates, planned exercises/sets, workout sessions, performed exercises/sets,
@@ -62,6 +63,10 @@ Endpoints:
 - `DELETE /v1/data` with a bearer token to reset the authenticated user's training data
 - `PATCH /v1/profile` with a bearer token and `name`
 - `PUT /v1/sync` with a bearer token, cursor, and incremental record changes. The response includes acknowledgements, conflicts, and server changes after the cursor.
+
+Authentication sessions are per login, so the same account can remain signed in
+on multiple devices. Signing out revokes only the supplied bearer token; resetting
+the password revokes all sessions.
 
 Copy the settings in `.env.example` into your environment for local or production deployment. Do not commit a Brevo API key.
 

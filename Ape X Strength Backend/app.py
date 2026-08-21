@@ -61,6 +61,15 @@ class User(db.Model):
         }
 
 
+class AuthSession(db.Model):
+    __tablename__ = "auth_sessions"
+
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = db.Column(db.Uuid, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class SyncRecord(db.Model):
     __tablename__ = "sync_records"
     __table_args__ = (db.UniqueConstraint("user_id", "entity_type", "client_uuid"),)
@@ -445,7 +454,22 @@ def authenticated_user():
     token = header.removeprefix("Bearer ") if header.startswith("Bearer ") else ""
     if not token:
         return None
-    return db.session.execute(db.select(User).filter_by(session_token_hash=digest(token))).scalar_one_or_none()
+    token_hash = digest(token)
+    auth_session = db.session.execute(
+        db.select(AuthSession).filter_by(token_hash=token_hash)
+    ).scalar_one_or_none()
+    if auth_session:
+        return db.session.get(User, auth_session.user_id)
+
+    # Accept tokens issued before the multi-device session migration until the
+    # user signs out or changes their password.
+    return db.session.execute(db.select(User).filter_by(session_token_hash=token_hash)).scalar_one_or_none()
+
+
+def create_auth_session(user):
+    token = secrets.token_urlsafe(32)
+    db.session.add(AuthSession(user_id=user.id, token_hash=digest(token)))
+    return token
 
 
 def generate_code():
@@ -566,8 +590,7 @@ def login():
     if not user.email_verified:
         return jsonify(error="Verify your email before logging in."), 403
 
-    token = secrets.token_urlsafe(32)
-    user.session_token_hash = digest(token)
+    token = create_auth_session(user)
     db.session.commit()
     return jsonify(token=token, user=user.json())
 
@@ -612,6 +635,7 @@ def reset_password():
     user.password_reset_code_hash = None
     user.password_reset_code_expires_at = None
     user.session_token_hash = None
+    db.session.execute(db.delete(AuthSession).where(AuthSession.user_id == user.id))
     db.session.commit()
     return "", 204
 
@@ -629,11 +653,10 @@ def verify_code():
     if not user or not expires_at or expires_at <= now or user.verification_code_hash != digest(code):
         return jsonify(error="Invalid or expired verification code."), 400
 
-    token = secrets.token_urlsafe(32)
+    token = create_auth_session(user)
     user.email_verified = True
     user.verification_code_hash = None
     user.verification_code_expires_at = None
-    user.session_token_hash = digest(token)
     db.session.commit()
     return jsonify(token=token, user=user.json())
 
@@ -656,11 +679,20 @@ def save_profile():
 def sign_out():
     header = request.headers.get("Authorization", "")
     token = header.removeprefix("Bearer ") if header.startswith("Bearer ") else ""
-    user = db.session.execute(db.select(User).filter_by(session_token_hash=digest(token))).scalar_one_or_none()
-    if not token or not user:
+    token_hash = digest(token) if token else ""
+    auth_session = db.session.execute(
+        db.select(AuthSession).filter_by(token_hash=token_hash)
+    ).scalar_one_or_none()
+    legacy_user = None if auth_session else db.session.execute(
+        db.select(User).filter_by(session_token_hash=token_hash)
+    ).scalar_one_or_none()
+    if not token or (not auth_session and not legacy_user):
         return jsonify(error="Unauthorized."), 401
 
-    user.session_token_hash = None
+    if auth_session:
+        db.session.delete(auth_session)
+    else:
+        legacy_user.session_token_hash = None
     db.session.commit()
     return "", 204
 

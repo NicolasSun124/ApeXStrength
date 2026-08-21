@@ -118,6 +118,35 @@ def test_authentication_flow():
         assert response.status_code == 200
 
 
+def test_multiple_devices_keep_independent_sessions_and_sign_out_independently():
+    with backend.app.app_context():
+        backend.db.drop_all()
+        backend.db.create_all()
+        user = backend.User(
+            email="multi-device@example.com",
+            password_hash=backend.generate_password_hash("password123"),
+            email_verified=True,
+        )
+        backend.db.session.add(user)
+        backend.db.session.commit()
+        client = backend.app.test_client()
+
+        first = client.post("/v1/auth/login", json={
+            "email": user.email, "password": "password123",
+        }).get_json()["token"]
+        second = client.post("/v1/auth/login", json={
+            "email": user.email, "password": "password123",
+        }).get_json()["token"]
+
+        assert first != second
+        assert client.patch("/v1/profile", headers={"Authorization": f"Bearer {first}"}, json={"name": "First"}).status_code == 200
+        assert client.patch("/v1/profile", headers={"Authorization": f"Bearer {second}"}, json={"name": "Second"}).status_code == 200
+
+        assert client.post("/v1/auth/sign-out", headers={"Authorization": f"Bearer {first}"}).status_code == 204
+        assert client.patch("/v1/profile", headers={"Authorization": f"Bearer {first}"}, json={"name": "Nope"}).status_code == 401
+        assert client.patch("/v1/profile", headers={"Authorization": f"Bearer {second}"}, json={"name": "Still signed in"}).status_code == 200
+
+
 def test_password_reset_flow_uses_random_single_use_code_and_revokes_session():
     sent = []
     backend.app.config.update(

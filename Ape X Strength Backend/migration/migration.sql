@@ -28,4 +28,12 @@ CREATE TABLE sync_records (
 CREATE INDEX ix_sync_records_user_id ON sync_records(user_id);
 CREATE INDEX ix_sync_records_user_revision ON sync_records(user_id, revision);
 
+CREATE TABLE auth_sessions (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX ix_auth_sessions_user_id ON auth_sessions(user_id);
+
 -- Apply migration/normalized_domain_migration.sql after this baseline schema.
