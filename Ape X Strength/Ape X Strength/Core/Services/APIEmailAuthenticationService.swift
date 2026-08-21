@@ -182,6 +182,10 @@ final class APIEmailAuthenticationService: EmailAuthenticationService {
         clearSession()
     }
 
+    func invalidateSession() {
+        clearSession()
+    }
+
     func deleteAccount() async throws {
         guard let token = tokenStore.read() else {
             throw EmailAuthenticationError.invalidResponse

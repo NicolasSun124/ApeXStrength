@@ -2,11 +2,13 @@ import CoreData
 import Foundation
 
 enum SyncServiceError: LocalizedError {
+    case unauthorized
     case invalidResponse
     case server(String)
 
     var errorDescription: String? {
         switch self {
+        case .unauthorized: return "Your session has expired. Log in again to sync your data."
         case .invalidResponse: return "The sync server returned an invalid response."
         case let .server(message): return message
         }
@@ -24,6 +26,7 @@ final class APISyncService: SyncService {
     private let baseURL: URL
     private let session: URLSession
     private let token: () -> String?
+    private let onUnauthorized: () -> Void
     private var runningTask: Task<Void, Error>?
 
     init(
@@ -32,7 +35,8 @@ final class APISyncService: SyncService {
         settings: any SettingsService,
         baseURL: URL,
         session: URLSession = .shared,
-        token: @escaping () -> String?
+        token: @escaping () -> String?,
+        onUnauthorized: @escaping () -> Void = {}
     ) {
         self.context = context
         self.userProvider = userProvider
@@ -40,6 +44,7 @@ final class APISyncService: SyncService {
         self.baseURL = baseURL
         self.session = session
         self.token = token
+        self.onUnauthorized = onUnauthorized
     }
 
     func hasPendingChanges() throws -> Bool {
@@ -73,6 +78,11 @@ final class APISyncService: SyncService {
         do { (data, response) = try await session.data(for: request) }
         catch { restoreInFlight(); throw error }
         guard let response = response as? HTTPURLResponse else { restoreInFlight(); throw SyncServiceError.invalidResponse }
+        if response.statusCode == 401 {
+            restoreInFlight()
+            onUnauthorized()
+            throw SyncServiceError.unauthorized
+        }
         guard 200..<300 ~= response.statusCode else {
             let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
             restoreInFlight(); throw SyncServiceError.server(message ?? "Unable to sync your data.")

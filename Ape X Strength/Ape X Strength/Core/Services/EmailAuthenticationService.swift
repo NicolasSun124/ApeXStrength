@@ -54,6 +54,7 @@ protocol EmailAuthenticationService: AnyObject {
     func resetData() async throws
     func deleteAccount() async throws
     func signOut() async
+    func invalidateSession()
 }
 
 /// Temporary local implementation used until a real authentication/email provider is connected.
@@ -175,6 +176,10 @@ final class TestEmailAuthenticationService: EmailAuthenticationService {
     }
 
     func signOut() async {
+        clearSession()
+    }
+
+    func invalidateSession() {
         clearSession()
     }
 

@@ -63,7 +63,8 @@ final class AppDependencies {
             userProvider: { currentUser.user },
             settings: settings,
             baseURL: configuredURL,
-            token: { authentication.currentSessionToken }
+            token: { authentication.currentSessionToken },
+            onUnauthorized: { authentication.invalidateSession() }
         )
         syncHolder.service = sync
         return AppDependencies(

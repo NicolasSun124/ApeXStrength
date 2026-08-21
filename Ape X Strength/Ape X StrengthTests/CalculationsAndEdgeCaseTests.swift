@@ -3,6 +3,43 @@ import XCTest
 
 final class CalculationsAndEdgeCaseTests: XCTestCase {
     @MainActor
+    func testUnauthorizedSyncInvalidatesSessionAndRestoresPendingData() async throws {
+        let fixture = try RepositoryFixture()
+        fixture.user.syncProtocolVersion = 2
+        fixture.user.hiddenExercisesSyncState = "synced"
+        let exercise = try fixture.makeExercise()
+        exercise.syncState = "pendingCreate"
+        try fixture.context.save()
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UnauthorizedURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        var didInvalidateSession = false
+        let service = APISyncService(
+            context: fixture.context,
+            userProvider: { fixture.user },
+            settings: fixture.settings,
+            baseURL: URL(string: "https://example.test/v1")!,
+            session: session,
+            token: { "expired-token" },
+            onUnauthorized: { didInvalidateSession = true }
+        )
+
+        do {
+            try await service.syncIfNeeded()
+            XCTFail("Expected an unauthorized sync error")
+        } catch SyncServiceError.unauthorized {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertTrue(didInvalidateSession)
+        XCTAssertEqual(exercise.syncState, "pendingUpdate")
+        XCTAssertTrue(try service.hasPendingChanges())
+    }
+
+    @MainActor
     func testStatisticsAverageCompletedSessionsAndIgnoreUnavailableValues() throws {
         let fixture = try RepositoryFixture()
         let exercise = try fixture.makeExercise()
@@ -169,4 +206,23 @@ final class CalculationsAndEdgeCaseTests: XCTestCase {
         }
     }
 
+}
+
+private final class UnauthorizedURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 401,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"error":"Unauthorized"}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() { }
 }

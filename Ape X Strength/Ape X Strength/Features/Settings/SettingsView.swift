@@ -854,7 +854,7 @@ private struct DeleteAccountConfirmationView: View {
                 Spacer()
 
                 Button {
-                    Task { await deleteAccount() }
+                    Task { await permanentlyDeleteAccount() }
                 } label: {
                     if isDeleting {
                         ProgressView().tint(.white)
@@ -885,7 +885,7 @@ private struct DeleteAccountConfirmationView: View {
     }
 
     @MainActor
-    private func deleteAccount() async {
+    private func permanentlyDeleteAccount() async {
         guard !isDeleting else { return }
         isDeleting = true
         errorMessage = nil
