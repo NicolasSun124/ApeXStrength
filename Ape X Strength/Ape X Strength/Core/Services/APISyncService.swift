@@ -403,6 +403,9 @@ final class APISyncService: SyncService {
     private func decimalNumber(_ value: Any?) -> NSDecimalNumber? { guard !(value is NSNull), let value else { return nil }; return NSDecimalNumber(string: String(describing: value)) }
     private func id(_ client: UUID?, _ server: UUID?) -> String { (client ?? server)?.uuidString ?? "" }
     private func iso(_ date: Date?) -> String { ISO8601DateFormatter().string(from: date ?? .distantPast) }
-    private func decimal(_ number: NSDecimalNumber?) -> Any { number?.stringValue ?? NSNull() }
+    private func decimal(_ number: NSDecimalNumber?) -> Any {
+        guard let number, number != .notANumber else { return NSNull() }
+        return number
+    }
     private func value<T>(_ value: T?) -> Any { value ?? NSNull() }
 }
