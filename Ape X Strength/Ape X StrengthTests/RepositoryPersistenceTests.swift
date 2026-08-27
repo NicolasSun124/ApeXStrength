@@ -129,6 +129,7 @@ final class RepositoryPersistenceTests: XCTestCase {
         let otherUser = User(context: fixture.context)
         otherUser.serverID = UUID()
         otherUser.email = "other@example.com"
+        otherUser.createdAt = Date()
         let global = Exercise(context: fixture.context)
         global.name = "Global Squat"
         global.serverID = UUID()
